@@ -212,3 +212,119 @@ export function calcStars(correct, total) {
   if (ratio >= STARS_THRESHOLDS[0]) return 1;
   return 0;
 }
+
+// ---------- Teste de Avaliação ----------
+// Metodologia inspirada na Medição Baseada no Currículo (CBM) e nos modelos
+// de "automaticidade" usados para avaliar fluência em factos matemáticos:
+// cada resposta é classificada pela precisão E pelo tempo de resposta,
+// não só pela precisão. Perguntas de todas as tabuadas são misturadas
+// (prática intercalada), o que avalia melhor a memorização real do que
+// perguntar tabuada a tabuada em sequência.
+
+export const QUESTIONS_PER_TABLE_IN_ASSESSMENT = 2;
+
+// Limiares de tempo de resposta (ms) para classificar o "à-vontade" da criança
+export const FLUENCY_THRESHOLDS = {
+  automatic: 3000,
+  developing: 7000,
+};
+
+export const TIER_WEIGHT = {
+  automatic: 1,
+  developing: 0.7,
+  slow: 0.4,
+  incorrect: 0,
+};
+
+export const TIER_LABELS = {
+  automatic: 'Sabe de cor',
+  developing: 'Sabe, mas pensa',
+  slow: 'Demorou muito',
+  incorrect: 'Errou',
+};
+
+export function classifyAnswer(correct, elapsedMs) {
+  if (!correct) return 'incorrect';
+  if (elapsedMs <= FLUENCY_THRESHOLDS.automatic) return 'automatic';
+  if (elapsedMs <= FLUENCY_THRESHOLDS.developing) return 'developing';
+  return 'slow';
+}
+
+export const ASSESSMENT_LEVELS = [
+  { min: 90, label: 'Mestre da Tabuada', emoji: '🏆' },
+  { min: 75, label: 'Confiante', emoji: '💪' },
+  { min: 55, label: 'Em Progresso', emoji: '🌱' },
+  { min: 35, label: 'A Aprender', emoji: '📘' },
+  { min: 0, label: 'A Começar', emoji: '🐣' },
+];
+
+export function getLevelForScore(score) {
+  return ASSESSMENT_LEVELS.find((l) => score >= l.min) || ASSESSMENT_LEVELS[ASSESSMENT_LEVELS.length - 1];
+}
+
+export const TABLE_STATUS_LABELS = {
+  forte: 'Forte',
+  media: 'Razoável',
+  fraca: 'A praticar',
+};
+
+/**
+ * Gera as perguntas do teste de avaliação: 2 perguntas por tabuada (1 a 10),
+ * com multiplicandos aleatórios, todas misturadas (prática intercalada).
+ * Cada pergunta guarda também `table` para depois agrupar os resultados.
+ */
+export function generateAssessmentQuestions() {
+  const list = [];
+  TABLES.forEach((table) => {
+    const ns = shuffle([...Array(10)].map((_, i) => i + 1)).slice(0, QUESTIONS_PER_TABLE_IN_ASSESSMENT);
+    ns.forEach((n) => list.push({ a: n, b: table, answer: n * table, table }));
+  });
+  return shuffle(list);
+}
+
+/**
+ * A partir das respostas dadas (com correct/elapsedMs/tier já calculados),
+ * constrói o relatório: pontuação geral, nível, e desempenho por tabuada.
+ */
+export function buildAssessmentReport(answers) {
+  const total = answers.length;
+  const correctCount = answers.filter((a) => a.correct).length;
+  const weightSum = answers.reduce((s, a) => s + TIER_WEIGHT[a.tier], 0);
+  const score = total > 0 ? Math.round((weightSum / total) * 100) : 0;
+  const level = getLevelForScore(score);
+
+  const byTable = {};
+  TABLES.forEach((t) => { byTable[t] = { total: 0, correct: 0, weightSum: 0, totalTimeMs: 0 }; });
+  answers.forEach((a) => {
+    const bucket = byTable[a.table];
+    if (!bucket) return;
+    bucket.total++;
+    if (a.correct) bucket.correct++;
+    bucket.weightSum += TIER_WEIGHT[a.tier];
+    bucket.totalTimeMs += a.elapsedMs;
+  });
+
+  const tableStats = TABLES.filter((t) => byTable[t].total > 0).map((t) => {
+    const b = byTable[t];
+    const ratio = b.weightSum / b.total;
+    let status;
+    if (ratio >= 0.85) status = 'forte';
+    else if (ratio >= 0.5) status = 'media';
+    else status = 'fraca';
+    return {
+      table: t,
+      correct: b.correct,
+      total: b.total,
+      avgTimeMs: Math.round(b.totalTimeMs / b.total),
+      ratio,
+      status,
+    };
+  });
+
+  const strong = [...tableStats].filter((t) => t.status === 'forte')
+    .sort((a, b) => b.ratio - a.ratio).slice(0, 4).map((t) => t.table);
+  const weak = [...tableStats].filter((t) => t.status !== 'forte')
+    .sort((a, b) => a.ratio - b.ratio).slice(0, 4).map((t) => t.table);
+
+  return { total, correctCount, score, level, tableStats, strong, weak };
+}

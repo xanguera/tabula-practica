@@ -137,7 +137,7 @@ function renderChoiceQuestion(container, question, timed, onResolve) {
 
 // ---------- Escrever a resposta ----------
 
-function renderTypeQuestion(container, question, timed, onResolve) {
+export function renderTypeQuestion(container, question, timed, onResolve) {
   clear(container);
   const startTime = performance.now();
   const timeLimit = 9000;
@@ -212,6 +212,7 @@ function renderTypeQuestion(container, question, timed, onResolve) {
 
   function finish(isCorrect) {
     document.removeEventListener('keydown', onKeydown);
+    const elapsedMs = Math.round(performance.now() - startTime);
     display.textContent = typed.length ? typed : String(question.answer);
     display.classList.add(isCorrect ? 'correct' : 'wrong');
     if (!isCorrect) {
@@ -225,12 +226,11 @@ function renderTypeQuestion(container, question, timed, onResolve) {
     if (isCorrect) {
       points = 10;
       if (timed) {
-        const elapsed = performance.now() - startTime;
-        const remaining = Math.max(0, 1 - elapsed / timeLimit);
+        const remaining = Math.max(0, 1 - elapsedMs / timeLimit);
         points += Math.round(remaining * 10);
       }
     }
-    onResolve({ correct: isCorrect, points });
+    onResolve({ correct: isCorrect, points, elapsedMs });
   }
 }
 

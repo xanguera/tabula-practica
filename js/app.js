@@ -1,9 +1,12 @@
 import {
   AVATARS, getAvatar, WORLDS, getWorld, stagesForWorld,
-  generateQuestions, calcStars,
+  generateQuestions, calcStars, generateAssessmentQuestions, buildAssessmentReport,
+  TABLE_STATUS_LABELS,
 } from './data.js';
 import * as store from './storage.js';
 import { runStage } from './exercises.js';
+import { runAssessment } from './assessment.js';
+import { shareReport, formatDuration } from './report.js';
 import { celebrate } from './confetti.js';
 import { playFanfare, playClick, unlockAudio } from './audio.js';
 
@@ -76,6 +79,11 @@ function render() {
   if (route === 'world') return renderStageList(parts[1]);
   if (route === 'stage') return renderGameplay(parts[1], Number(parts[2]));
   if (route === 'result') return renderResult();
+  if (route === 'assessment') {
+    if (parts[1] === 'run') return renderAssessmentRun();
+    if (parts[1] === 'report') return renderAssessmentReport(parts[2]);
+    return renderAssessmentHub();
+  }
 
   location.hash = '#/profiles';
 }
@@ -248,6 +256,13 @@ function renderMap() {
 
   screen.appendChild(makeEl('h2', 'title-hero', 'O teu percurso'));
   screen.appendChild(makeEl('p', 'subtitle', 'Sobe de tabuada em tabuada!'));
+
+  const assessmentBtn = makeEl('button', 'btn assessment-entry block', '📋 Teste de Avaliação');
+  assessmentBtn.addEventListener('click', () => {
+    playClick();
+    navigate('#/assessment');
+  });
+  screen.appendChild(assessmentBtn);
 
   const scroll = makeEl('div', 'map-scroll');
   const path = makeEl('div', 'map-path');
@@ -480,6 +495,172 @@ function renderResult() {
     playFanfare();
     celebrate(gameFullyComplete ? 'grand' : worldJustCompleted ? 'world' : 'stage');
   }
+}
+
+// ---------- Ecrã: hub do teste de avaliação (início + histórico) ----------
+
+function renderAssessmentHub() {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/map'),
+  }));
+
+  screen.appendChild(makeEl('div', 'mascot', '🧪'));
+  screen.appendChild(makeEl('h2', 'title-hero', 'Teste de Avaliação'));
+  screen.appendChild(makeEl('p', 'subtitle', 'Descobre em que tabuadas já és um crack e onde vale a pena praticar mais. Responde com calma, no teu ritmo — não há relógio à vista!'));
+
+  const startBtn = makeEl('button', 'btn primary block', 'Começar Teste 🚀');
+  startBtn.style.marginTop = '18px';
+  startBtn.addEventListener('click', () => {
+    playClick();
+    navigate('#/assessment/run');
+  });
+  screen.appendChild(startBtn);
+
+  const history = store.getAssessments(profile.id);
+
+  screen.appendChild(makeEl('h3', 'section-title', 'Histórico'));
+
+  if (history.length === 0) {
+    screen.appendChild(makeEl('p', 'subtitle', 'Ainda não fizeste nenhum teste. Experimenta agora!'));
+  } else {
+    const list = makeEl('div', 'history-list');
+    history.forEach((record) => {
+      const item = makeEl('div', 'history-card');
+      const dateStr = new Date(record.dateISO).toLocaleDateString('pt-PT', { day: '2-digit', month: 'short', year: 'numeric' });
+      item.appendChild(makeEl('div', 'history-emoji', record.level.emoji));
+      const info = makeEl('div', 'history-info');
+      info.appendChild(makeEl('div', 'history-date', dateStr));
+      info.appendChild(makeEl('div', 'history-level', record.level.label));
+      item.appendChild(info);
+      item.appendChild(makeEl('div', 'history-score', String(record.score)));
+      item.addEventListener('click', () => {
+        playClick();
+        navigate(`#/assessment/report/${record.id}`);
+      });
+      list.appendChild(item);
+    });
+    screen.appendChild(list);
+  }
+
+  app.appendChild(screen);
+}
+
+// ---------- Ecrã: teste de avaliação em curso ----------
+
+function renderAssessmentRun() {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/assessment'),
+  }));
+
+  const progressTrack = makeEl('div', 'progress-bar-track');
+  const progressFill = makeEl('div', 'progress-bar-fill');
+  progressFill.style.width = '0%';
+  progressTrack.appendChild(progressFill);
+  screen.appendChild(progressTrack);
+  screen.appendChild(makeEl('p', 'question-hint center-text', 'Sem pressa, escreve a resposta que achares certa.'));
+
+  const content = makeEl('div', 'exercise-content');
+  screen.appendChild(content);
+  app.appendChild(screen);
+
+  const questions = generateAssessmentQuestions();
+
+  runAssessment(content, questions, {
+    onProgress: ({ index, total }) => {
+      const pct = (index / total) * 100;
+      progressFill.style.width = `${pct}%`;
+    },
+    onComplete: ({ answers, totalTimeMs }) => {
+      const report = buildAssessmentReport(answers);
+      const record = {
+        id: 'a_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        dateISO: new Date().toISOString(),
+        totalTimeMs,
+        ...report,
+      };
+      store.saveAssessment(profile.id, record);
+      navigate(`#/assessment/report/${record.id}`);
+    },
+  });
+}
+
+// ---------- Ecrã: relatório de um teste ----------
+
+function renderAssessmentReport(id) {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  const record = store.getAssessment(profile.id, id);
+  if (!record) { navigate('#/assessment'); return; }
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/assessment'),
+  }));
+
+  const dateStr = new Date(record.dateISO).toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  screen.appendChild(makeEl('div', 'mascot', record.level.emoji));
+  screen.appendChild(makeEl('h2', 'title-hero', 'O teu Relatório'));
+  screen.appendChild(makeEl('p', 'subtitle', dateStr));
+
+  const scoreBlock = makeEl('div', 'report-score-block');
+  scoreBlock.appendChild(makeEl('div', 'report-score-number', String(record.score)));
+  scoreBlock.appendChild(makeEl('div', 'report-score-label', 'PONTOS'));
+  screen.appendChild(scoreBlock);
+
+  screen.appendChild(makeEl('div', 'report-level', `${record.level.emoji} ${record.level.label}`));
+  screen.appendChild(makeEl('div', 'result-sub', `${record.correctCount} de ${record.total} respostas certas · ${formatDuration(record.totalTimeMs)}`));
+
+  const grid = makeEl('div', 'report-table-grid');
+  record.tableStats.forEach((t) => {
+    const cell = makeEl('div', `report-table-cell status-${t.status}`);
+    cell.appendChild(makeEl('div', 'report-table-num', `× ${t.table}`));
+    cell.appendChild(makeEl('div', 'report-table-status', TABLE_STATUS_LABELS[t.status]));
+    grid.appendChild(cell);
+  });
+  screen.appendChild(grid);
+
+  if (record.strong.length) {
+    screen.appendChild(makeEl('div', 'report-note strong', `✅ Pontos fortes: tabuada do ${record.strong.join(', ')}`));
+  }
+  if (record.weak.length) {
+    screen.appendChild(makeEl('div', 'report-note weak', `📌 A praticar: tabuada do ${record.weak.join(', ')}`));
+  }
+
+  const btnRow = makeEl('div', 'btn-row');
+  btnRow.style.marginTop = '20px';
+  btnRow.style.flexDirection = 'column';
+  btnRow.style.width = '100%';
+
+  const shareBtn = makeEl('button', 'btn primary block', 'Partilhar relatório 📤');
+  shareBtn.addEventListener('click', async () => {
+    const { method } = await shareReport(profile, record);
+    if (method === 'download+clipboard' || method === 'download') showToast('Relatório guardado! 📥');
+    if (method === 'clipboard') showToast('Relatório copiado! 📋');
+  });
+  btnRow.appendChild(shareBtn);
+
+  const backBtn = makeEl('button', 'btn secondary block', 'Voltar');
+  backBtn.style.marginTop = '10px';
+  backBtn.addEventListener('click', () => navigate('#/assessment'));
+  btnRow.appendChild(backBtn);
+
+  screen.appendChild(btnRow);
+  app.appendChild(screen);
 }
 
 function escapeHtml(str) {

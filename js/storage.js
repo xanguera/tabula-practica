@@ -4,6 +4,8 @@ import { WORLDS, worldIndex, stagesForWorld, getWorld } from './data.js';
 const KEY_PROFILES = 'td_profiles_v1';
 const KEY_ACTIVE = 'td_active_profile_v1';
 const KEY_PROGRESS_PREFIX = 'td_progress_v1_';
+const KEY_ASSESSMENTS_PREFIX = 'td_assessments_v1_';
+const MAX_ASSESSMENT_HISTORY = 50;
 
 function read(key, fallback) {
   try {
@@ -44,6 +46,7 @@ export function deleteProfile(id) {
   const profiles = getProfiles().filter((p) => p.id !== id);
   write(KEY_PROFILES, profiles);
   localStorage.removeItem(KEY_PROGRESS_PREFIX + id);
+  localStorage.removeItem(KEY_ASSESSMENTS_PREFIX + id);
   if (getActiveProfileId() === id) {
     setActiveProfileId(profiles.length ? profiles[0].id : null);
   }
@@ -154,4 +157,22 @@ export function getTotalStars(profileId) {
 
 export function isGameFullyComplete(profileId) {
   return WORLDS.every((w) => isWorldFullyStarred(profileId, w.id));
+}
+
+// ---------- Histórico do teste de avaliação ----------
+
+export function getAssessments(profileId) {
+  return read(KEY_ASSESSMENTS_PREFIX + profileId, []);
+}
+
+export function getAssessment(profileId, id) {
+  return getAssessments(profileId).find((a) => a.id === id) || null;
+}
+
+export function saveAssessment(profileId, record) {
+  const list = getAssessments(profileId);
+  list.unshift(record);
+  if (list.length > MAX_ASSESSMENT_HISTORY) list.length = MAX_ASSESSMENT_HISTORY;
+  write(KEY_ASSESSMENTS_PREFIX + profileId, list);
+  return record;
 }

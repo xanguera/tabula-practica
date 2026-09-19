@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tabuada-divertida-v2';
+const CACHE_NAME = 'tabuada-divertida-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -9,9 +9,12 @@ const ASSETS = [
   './js/data.js',
   './js/exercises.js',
   './js/assessment.js',
+  './js/review.js',
   './js/report.js',
   './js/confetti.js',
   './js/audio.js',
+  './js/config.js',
+  './js/cloud-sync.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',

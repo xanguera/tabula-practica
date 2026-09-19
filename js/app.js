@@ -1,14 +1,16 @@
 import {
   AVATARS, getAvatar, WORLDS, getWorld, stagesForWorld,
   generateQuestions, calcStars, generateAssessmentQuestions, buildAssessmentReport,
-  TABLE_STATUS_LABELS,
+  TABLE_STATUS_LABELS, suggestPlacementWorld, generateReviewQuestions,
 } from './data.js';
 import * as store from './storage.js';
 import { runStage } from './exercises.js';
 import { runAssessment } from './assessment.js';
+import { runReview } from './review.js';
 import { shareReport, formatDuration } from './report.js';
 import { celebrate } from './confetti.js';
 import { playFanfare, playClick, unlockAudio } from './audio.js';
+import * as cloud from './cloud-sync.js';
 
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
@@ -24,6 +26,10 @@ function showToast(msg) {
 // Guarda o último resultado de estágio para passar para o ecrã de resultado
 let lastResult = null;
 let pendingCreateAvatar = AVATARS[0].id;
+// Marca o id do teste de avaliação que acabou de ser concluído, para o
+// relatório saber se deve oferecer a sugestão de salto (só faz sentido
+// logo a seguir ao teste, não ao reabrir um relatório do histórico)
+let freshAssessmentId = null;
 
 function navigate(hash) {
   if (location.hash === hash) render();
@@ -84,6 +90,11 @@ function render() {
     if (parts[1] === 'report') return renderAssessmentReport(parts[2]);
     return renderAssessmentHub();
   }
+  if (route === 'review') {
+    if (parts[1] === 'run') return renderReviewRun();
+    return renderReviewHub();
+  }
+  if (route === 'cloud') return renderCloud();
 
   location.hash = '#/profiles';
 }
@@ -151,6 +162,11 @@ function renderProfileSelect() {
   grid.appendChild(addCard);
 
   screen.appendChild(grid);
+
+  const cloudBtn = makeEl('button', 'btn secondary block cloud-entry', '☁️ Guardar dados online');
+  cloudBtn.addEventListener('click', () => navigate('#/cloud'));
+  screen.appendChild(cloudBtn);
+
   app.appendChild(screen);
 }
 
@@ -224,21 +240,40 @@ function renderCreateProfile() {
 
 // ---------- Topbar reutilizável ----------
 
-function buildTopbar(profile, { showBack, onBack } = {}) {
+function buildTopbar(profile, { showBack, onBack, showHome = true } = {}) {
   const topbar = makeEl('div', 'topbar');
-  const left = makeEl('div', 'player-chip');
+
+  const navGroup = makeEl('div', 'topbar-nav');
   if (showBack) {
     const back = makeEl('button', 'icon-btn', '←');
     back.addEventListener('click', onBack);
-    topbar.appendChild(back);
+    navGroup.appendChild(back);
   }
+  if (showHome) {
+    const home = makeEl('button', 'icon-btn', '🏠');
+    home.addEventListener('click', () => navigate('#/map'));
+    navGroup.appendChild(home);
+  }
+  topbar.appendChild(navGroup);
+
+  const left = makeEl('div', 'player-chip');
   left.appendChild(avatarBadge(profile.avatar));
   left.appendChild(makeEl('div', 'name', escapeHtml(profile.name)));
   topbar.appendChild(left);
 
-  const points = makeEl('div', 'points-chip', `⭐ ${store.getTotalPoints(profile.id)}`);
-  topbar.appendChild(points);
+  const right = makeEl('div', 'topbar-right');
+  const streak = store.getDisplayStreak(profile.id);
+  right.appendChild(makeEl('div', `streak-chip ${streak > 0 ? 'active' : ''}`, `🔥 ${streak}`));
+  right.appendChild(makeEl('div', 'points-chip', `⭐ ${store.getTotalPoints(profile.id)}`));
+  topbar.appendChild(right);
+
   return topbar;
+}
+
+function addFloatingHome(screen) {
+  const home = makeEl('button', 'icon-btn floating-home', '🏠');
+  home.addEventListener('click', () => navigate('#/map'));
+  screen.appendChild(home);
 }
 
 // ---------- Ecrã: mapa de mundos ----------
@@ -251,11 +286,20 @@ function renderMap() {
   const screen = makeEl('div', 'screen');
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
+    showHome: false,
     onBack: () => navigate('#/profiles'),
   }));
 
   screen.appendChild(makeEl('h2', 'title-hero', 'O teu percurso'));
   screen.appendChild(makeEl('p', 'subtitle', 'Sobe de tabuada em tabuada!'));
+
+  const streak = store.getDisplayStreak(profile.id);
+  const reviewBtn = makeEl('button', 'btn review-entry block', `🔁 Revisão Diária${streak > 0 ? ` · 🔥${streak}` : ''}`);
+  reviewBtn.addEventListener('click', () => {
+    playClick();
+    navigate('#/review');
+  });
+  screen.appendChild(reviewBtn);
 
   const assessmentBtn = makeEl('button', 'btn assessment-entry block', '📋 Teste de Avaliação');
   assessmentBtn.addEventListener('click', () => {
@@ -435,6 +479,7 @@ function renderResult() {
   const { stars, points, correct, total, worldId, stageIndex, worldTitle, worldJustCompleted, gameFullyComplete } = lastResult;
 
   const screen = makeEl('div', 'result-screen');
+  addFloatingHome(screen);
 
   const messages3 = ['Perfeito! 🌟', 'Incrível! 🎉', 'És um génio da matemática!'];
   const messages2 = ['Muito bem! 👏', 'Boa! Quase perfeito!'];
@@ -591,6 +636,7 @@ function renderAssessmentRun() {
         ...report,
       };
       store.saveAssessment(profile.id, record);
+      freshAssessmentId = record.id;
       navigate(`#/assessment/report/${record.id}`);
     },
   });
@@ -641,6 +687,40 @@ function renderAssessmentReport(id) {
     screen.appendChild(makeEl('div', 'report-note weak', `📌 A praticar: tabuada do ${record.weak.join(', ')}`));
   }
 
+  const isFresh = freshAssessmentId === record.id;
+  freshAssessmentId = null;
+
+  if (isFresh) {
+    const suggestedId = suggestPlacementWorld(record);
+    if (suggestedId && !store.isWorldUnlocked(profile.id, suggestedId)) {
+      const suggestedWorld = getWorld(suggestedId);
+      const label = suggestedWorld.isFinal ? 'o Desafio Final' : `a Tabuada do ${suggestedWorld.table}`;
+      const card = makeEl('div', 'placement-card');
+      card.appendChild(makeEl('div', 'placement-text', `💡 Com base no teste, parece que estás pronto para ${label}! Queres saltar já para lá?`));
+
+      const row = makeEl('div', 'btn-row');
+      row.style.flexDirection = 'column';
+      row.style.width = '100%';
+      row.style.marginTop = '10px';
+
+      const yesBtn = makeEl('button', 'btn primary block', 'Sim, vamos lá! 🚀');
+      yesBtn.addEventListener('click', () => {
+        store.unlockWorldsUpTo(profile.id, suggestedId);
+        playFanfare();
+        navigate(`#/world/${suggestedId}`);
+      });
+      row.appendChild(yesBtn);
+
+      const noBtn = makeEl('button', 'btn secondary block', 'Não, continuar como está');
+      noBtn.style.marginTop = '8px';
+      noBtn.addEventListener('click', () => card.remove());
+      row.appendChild(noBtn);
+
+      card.appendChild(row);
+      screen.appendChild(card);
+    }
+  }
+
   const btnRow = makeEl('div', 'btn-row');
   btnRow.style.marginTop = '20px';
   btnRow.style.flexDirection = 'column';
@@ -658,6 +738,218 @@ function renderAssessmentReport(id) {
   backBtn.style.marginTop = '10px';
   backBtn.addEventListener('click', () => navigate('#/assessment'));
   btnRow.appendChild(backBtn);
+
+  screen.appendChild(btnRow);
+  app.appendChild(screen);
+}
+
+// ---------- Ecrã: Revisão Diária (início) ----------
+
+function renderReviewHub() {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/map'),
+  }));
+
+  screen.appendChild(makeEl('div', 'mascot', '🔁'));
+  screen.appendChild(makeEl('h2', 'title-hero', 'Revisão Diária'));
+
+  const doneToday = store.isReviewDoneToday(profile.id);
+  screen.appendChild(makeEl('p', 'subtitle', doneToday
+    ? 'Já fizeste a revisão de hoje! Podes repetir só por diversão.'
+    : 'Dez perguntas rápidas para manter a tabuada fresquinha na cabeça, todos os dias!'));
+
+  const streak = store.getDisplayStreak(profile.id);
+  const streakBlock = makeEl('div', 'streak-block');
+  streakBlock.appendChild(makeEl('div', 'streak-flame', streak > 0 ? '🔥' : '🧊'));
+  streakBlock.appendChild(makeEl('div', 'streak-count', String(streak)));
+  streakBlock.appendChild(makeEl('div', 'streak-label', streak === 1 ? 'dia seguido' : 'dias seguidos'));
+  screen.appendChild(streakBlock);
+
+  const startBtn = makeEl('button', 'btn primary block', doneToday ? 'Praticar outra vez 🔁' : 'Começar Revisão 🚀');
+  startBtn.style.marginTop = '18px';
+  startBtn.addEventListener('click', () => {
+    playClick();
+    navigate('#/review/run');
+  });
+  screen.appendChild(startBtn);
+
+  app.appendChild(screen);
+}
+
+// ---------- Ecrã: Revisão Diária (a decorrer) ----------
+
+function renderReviewRun() {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/review'),
+  }));
+
+  const progressTrack = makeEl('div', 'progress-bar-track');
+  const progressFill = makeEl('div', 'progress-bar-fill');
+  progressFill.style.width = '0%';
+  progressTrack.appendChild(progressFill);
+  screen.appendChild(progressTrack);
+
+  const content = makeEl('div', 'exercise-content');
+  screen.appendChild(content);
+  app.appendChild(screen);
+
+  const unlockedTables = WORLDS.filter((w) => !w.isFinal && store.isWorldUnlocked(profile.id, w.id)).map((w) => w.table);
+  const assessments = store.getAssessments(profile.id);
+  const priorityTables = assessments.length ? assessments[0].weak : [];
+  const questions = generateReviewQuestions(unlockedTables, priorityTables, 10);
+
+  runReview(content, questions, {
+    onProgress: ({ index, total }) => {
+      progressFill.style.width = `${(index / total) * 100}%`;
+    },
+    onComplete: ({ correct, total }) => {
+      const points = correct * 5;
+      store.addBonusPoints(profile.id, points);
+      const streakState = store.recordReviewCompletion(profile.id);
+      renderReviewResult(profile, {
+        correct, total, points,
+        streak: streakState.currentStreak,
+        isMilestone: [3, 7, 14, 30, 60, 100].includes(streakState.currentStreak),
+      });
+    },
+  });
+}
+
+// ---------- Ecrã: Revisão Diária (resultado) ----------
+
+function renderReviewResult(profile, { correct, total, points, streak, isMilestone }) {
+  clearApp();
+
+  const screen = makeEl('div', 'result-screen');
+  addFloatingHome(screen);
+
+  screen.appendChild(makeEl('div', 'mascot', isMilestone ? '🏅' : '🔁'));
+  screen.appendChild(makeEl('h2', 'title-hero', 'Revisão Completa!'));
+  screen.appendChild(makeEl('div', 'result-sub', `${correct} de ${total} certas`));
+  screen.appendChild(makeEl('div', 'result-points', `+${points} pontos`));
+
+  const streakBlock = makeEl('div', 'streak-block');
+  streakBlock.appendChild(makeEl('div', 'streak-flame', '🔥'));
+  streakBlock.appendChild(makeEl('div', 'streak-count', String(streak)));
+  streakBlock.appendChild(makeEl('div', 'streak-label', streak === 1 ? 'dia seguido' : 'dias seguidos'));
+  screen.appendChild(streakBlock);
+
+  if (isMilestone) {
+    screen.appendChild(makeEl('div', 'result-message', `🎉 ${streak} dias seguidos! Continua assim!`));
+  }
+
+  const btnRow = makeEl('div', 'btn-row');
+  btnRow.style.marginTop = '20px';
+  btnRow.style.flexDirection = 'column';
+  btnRow.style.width = '100%';
+
+  const doneBtn = makeEl('button', 'btn primary block', 'Voltar ao Mapa');
+  doneBtn.addEventListener('click', () => navigate('#/map'));
+  btnRow.appendChild(doneBtn);
+
+  screen.appendChild(btnRow);
+  app.appendChild(screen);
+
+  playFanfare();
+  celebrate(isMilestone ? 'world' : 'stage');
+}
+
+// ---------- Ecrã: Guardar dados online (Google Drive) ----------
+
+function renderCloud() {
+  clearApp();
+  const screen = makeEl('div', 'screen');
+
+  const topbar = makeEl('div', 'topbar');
+  const back = makeEl('button', 'icon-btn', '←');
+  back.addEventListener('click', () => navigate('#/profiles'));
+  topbar.appendChild(back);
+  screen.appendChild(topbar);
+
+  screen.appendChild(makeEl('div', 'mascot', '☁️'));
+  screen.appendChild(makeEl('h2', 'title-hero', 'Guardar Online'));
+
+  if (!cloud.isConfigured()) {
+    screen.appendChild(makeEl('p', 'subtitle', 'Esta funcionalidade ainda não foi configurada pelo dono do jogo. Não te preocupes — os dados continuam guardados em segurança neste telemóvel.'));
+    app.appendChild(screen);
+    return;
+  }
+
+  screen.appendChild(makeEl('p', 'subtitle', 'Guarda uma cópia de todos os jogadores e do progresso na tua própria conta Google (Drive). Os dados vão diretamente daqui para lá — nunca passam por nenhum servidor externo.'));
+
+  const lastSync = cloud.getLastSyncLabel();
+  const statusText = cloud.isSignedIn()
+    ? (lastSync ? `Última cópia guardada: ${lastSync}` : 'Conta ligada. Ainda sem nenhuma cópia guardada.')
+    : 'Conta Google ainda não ligada.';
+  screen.appendChild(makeEl('p', 'subtitle', statusText));
+
+  const btnRow = makeEl('div', 'btn-row');
+  btnRow.style.flexDirection = 'column';
+  btnRow.style.width = '100%';
+  btnRow.style.marginTop = '16px';
+
+  if (!cloud.isSignedIn()) {
+    const connectBtn = makeEl('button', 'btn primary block', 'Ligar conta Google');
+    connectBtn.addEventListener('click', async () => {
+      try {
+        await cloud.signIn();
+        renderCloud();
+      } catch (e) {
+        showToast('Não foi possível ligar à conta Google.');
+      }
+    });
+    btnRow.appendChild(connectBtn);
+  } else {
+    const backupBtn = makeEl('button', 'btn primary block', 'Guardar cópia agora ⬆️');
+    backupBtn.addEventListener('click', async () => {
+      backupBtn.disabled = true;
+      try {
+        await cloud.backupNow();
+        showToast('Cópia guardada no Google Drive! ☁️');
+        renderCloud();
+      } catch (e) {
+        showToast('Não foi possível guardar a cópia.');
+        backupBtn.disabled = false;
+      }
+    });
+    btnRow.appendChild(backupBtn);
+
+    const restoreBtn = makeEl('button', 'btn secondary block', 'Restaurar do Google ⬇️');
+    restoreBtn.style.marginTop = '10px';
+    restoreBtn.addEventListener('click', async () => {
+      if (!confirm('Isto substitui os dados guardados neste telemóvel pelos dados do Google Drive. Continuar?')) return;
+      restoreBtn.disabled = true;
+      try {
+        await cloud.restoreNow();
+        showToast('Dados restaurados! A recarregar…');
+        setTimeout(() => location.reload(), 800);
+      } catch (e) {
+        showToast(e.message === 'no-backup-found' ? 'Ainda não há nenhuma cópia guardada.' : 'Não foi possível restaurar.');
+        restoreBtn.disabled = false;
+      }
+    });
+    btnRow.appendChild(restoreBtn);
+
+    const disconnectBtn = makeEl('button', 'btn secondary block', 'Desligar conta');
+    disconnectBtn.style.marginTop = '10px';
+    disconnectBtn.addEventListener('click', () => {
+      cloud.signOut();
+      renderCloud();
+    });
+    btnRow.appendChild(disconnectBtn);
+  }
 
   screen.appendChild(btnRow);
   app.appendChild(screen);

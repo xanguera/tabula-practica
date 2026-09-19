@@ -63,7 +63,7 @@ export function runStage(container, world, stageDef, questions, callbacks) {
 
 // ---------- Escolha múltipla ----------
 
-function renderChoiceQuestion(container, question, timed, onResolve) {
+export function renderChoiceQuestion(container, question, timed, onResolve) {
   clear(container);
   const options = generateOptions(question, 4);
   const startTime = performance.now();

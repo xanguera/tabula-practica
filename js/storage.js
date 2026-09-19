@@ -5,6 +5,7 @@ const KEY_PROFILES = 'td_profiles_v1';
 const KEY_ACTIVE = 'td_active_profile_v1';
 const KEY_PROGRESS_PREFIX = 'td_progress_v1_';
 const KEY_ASSESSMENTS_PREFIX = 'td_assessments_v1_';
+const KEY_REVIEW_PREFIX = 'td_review_v1_';
 const MAX_ASSESSMENT_HISTORY = 50;
 
 function read(key, fallback) {
@@ -47,6 +48,7 @@ export function deleteProfile(id) {
   write(KEY_PROFILES, profiles);
   localStorage.removeItem(KEY_PROGRESS_PREFIX + id);
   localStorage.removeItem(KEY_ASSESSMENTS_PREFIX + id);
+  localStorage.removeItem(KEY_REVIEW_PREFIX + id);
   if (getActiveProfileId() === id) {
     setActiveProfileId(profiles.length ? profiles[0].id : null);
   }
@@ -136,8 +138,33 @@ export function isWorldFullyStarred(profileId, worldId) {
 export function isWorldUnlocked(profileId, worldId) {
   const idx = worldIndex(worldId);
   if (idx === 0) return true;
+  const progress = getProgress(profileId);
+  if (progress.placementUnlocks && progress.placementUnlocks[worldId]) return true;
   const prevWorld = WORLDS[idx - 1];
   return isWorldFullyStarred(profileId, prevWorld.id);
+}
+
+/**
+ * Usado pelo teste de avaliação: quando a criança decide "saltar" para a
+ * tabuada sugerida, desbloqueamos essa tabuada e todas as anteriores
+ * (como um teste de nivelamento), para o mapa não mostrar buracos.
+ */
+export function unlockWorldsUpTo(profileId, worldId) {
+  const idx = worldIndex(worldId);
+  if (idx < 0) return;
+  const progress = getProgress(profileId);
+  progress.placementUnlocks = progress.placementUnlocks || {};
+  for (let i = 0; i <= idx; i++) {
+    progress.placementUnlocks[WORLDS[i].id] = true;
+  }
+  saveProgress(profileId, progress);
+}
+
+export function addBonusPoints(profileId, points) {
+  const progress = getProgress(profileId);
+  progress.totalPoints = (progress.totalPoints || 0) + points;
+  saveProgress(profileId, progress);
+  return progress.totalPoints;
 }
 
 export function isStageUnlocked(profileId, worldId, stageIndex) {
@@ -175,4 +202,58 @@ export function saveAssessment(profileId, record) {
   if (list.length > MAX_ASSESSMENT_HISTORY) list.length = MAX_ASSESSMENT_HISTORY;
   write(KEY_ASSESSMENTS_PREFIX + profileId, list);
   return record;
+}
+
+// ---------- Revisão diária / sequência (streak) ----------
+
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function dateKeyOffset(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function defaultReviewState() {
+  return { lastCompletedDate: null, currentStreak: 0, longestStreak: 0, totalReviews: 0 };
+}
+
+export function getReviewState(profileId) {
+  return read(KEY_REVIEW_PREFIX + profileId, defaultReviewState());
+}
+
+export function isReviewDoneToday(profileId) {
+  return getReviewState(profileId).lastCompletedDate === todayKey();
+}
+
+/** Sequência a mostrar na interface: quebra visualmente se falhou mais do que um dia. */
+export function getDisplayStreak(profileId) {
+  const state = getReviewState(profileId);
+  const today = todayKey();
+  const yesterday = dateKeyOffset(-1);
+  if (state.lastCompletedDate === today || state.lastCompletedDate === yesterday) {
+    return state.currentStreak;
+  }
+  return 0;
+}
+
+export function recordReviewCompletion(profileId) {
+  const state = getReviewState(profileId);
+  const today = todayKey();
+  const yesterday = dateKeyOffset(-1);
+  if (state.lastCompletedDate === today) {
+    // já contou hoje, não volta a incrementar
+  } else if (state.lastCompletedDate === yesterday) {
+    state.currentStreak += 1;
+  } else {
+    state.currentStreak = 1;
+  }
+  state.lastCompletedDate = today;
+  state.longestStreak = Math.max(state.longestStreak || 0, state.currentStreak);
+  state.totalReviews = (state.totalReviews || 0) + 1;
+  write(KEY_REVIEW_PREFIX + profileId, state);
+  return state;
 }

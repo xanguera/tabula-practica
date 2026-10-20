@@ -20,8 +20,10 @@
 // próprio telemóvel).
 export const GOOGLE_CLIENT_ID = '';
 
-// Âmbito mínimo: só dá acesso a ficheiros que esta própria app cria no
-// Drive do jogador — nunca ao resto do Drive dele.
-export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+// Âmbito mínimo possível: dá acesso apenas à "pasta de dados da aplicação"
+// (appDataFolder), uma pasta escondida e exclusiva deste jogo dentro do
+// Drive do jogador. Não vemos — nem podemos ver — mais nada do Drive dele,
+// e nenhuma outra app consegue ler esta pasta.
+export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 
 export const BACKUP_FILE_NAME = 'tabuada-divertida-backup.json';

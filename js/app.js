@@ -51,6 +51,35 @@ function boot() {
     render();
   }
   registerServiceWorker();
+  startCloudSync();
+}
+
+// ---------- Sincronização automática com o Google Drive ----------
+
+function isSafeToReplaceData() {
+  const parts = parseRoute();
+  if (parts[0] === 'stage') return false;
+  if (parts[0] === 'assessment' && parts[1] === 'run') return false;
+  if (parts[0] === 'review' && parts[1] === 'run') return false;
+  return true;
+}
+
+function startCloudSync() {
+  // A meio de uma ronda não deixamos a nuvem substituir os dados locais.
+  cloud.setApplyGuard(isSafeToReplaceData);
+
+  cloud.subscribe((event) => {
+    if (event.type === 'data-replaced') {
+      showToast('Dados atualizados a partir do Google ☁️');
+      render();
+      return;
+    }
+    // O estado (a sincronizar / a precisar de nova ligação) só se vê no
+    // ecrã da nuvem, por isso só vale a pena redesenhar quando lá estamos.
+    if (parseRoute()[0] === 'cloud') renderCloud();
+  });
+
+  cloud.init();
 }
 
 function registerServiceWorker() {
@@ -163,7 +192,11 @@ function renderProfileSelect() {
 
   screen.appendChild(grid);
 
-  const cloudBtn = makeEl('button', 'btn secondary block cloud-entry', '☁️ Guardar dados online');
+  const cloudNeedsAttention = cloud.getStatus() === 'reconnect' || cloud.hasPendingConflict();
+  const cloudLabel = cloudNeedsAttention
+    ? '⚠️ Sincronização precisa de atenção'
+    : (cloud.isEnabled() ? '☁️ Dados guardados online' : '☁️ Guardar dados online');
+  const cloudBtn = makeEl('button', 'btn secondary block cloud-entry', cloudLabel);
   cloudBtn.addEventListener('click', () => navigate('#/cloud'));
   screen.appendChild(cloudBtn);
 
@@ -887,49 +920,80 @@ function renderCloud() {
     return;
   }
 
-  screen.appendChild(makeEl('p', 'subtitle', 'Guarda uma cópia de todos os jogadores e do progresso na tua própria conta Google (Drive). Os dados vão diretamente daqui para lá — nunca passam por nenhum servidor externo.'));
-
-  const lastSync = cloud.getLastSyncLabel();
-  const statusText = cloud.isSignedIn()
-    ? (lastSync ? `Última cópia guardada: ${lastSync}` : 'Conta ligada. Ainda sem nenhuma cópia guardada.')
-    : 'Conta Google ainda não ligada.';
-  screen.appendChild(makeEl('p', 'subtitle', statusText));
+  screen.appendChild(makeEl('p', 'subtitle', 'Liga a tua conta Google uma vez e o jogo passa a guardar sozinho os jogadores e o progresso na tua conta. Assim podes continuar noutro telemóvel ou tablet. Os dados vão diretamente daqui para o Google — nunca passam por nenhum servidor nosso.'));
 
   const btnRow = makeEl('div', 'btn-row');
   btnRow.style.flexDirection = 'column';
   btnRow.style.width = '100%';
   btnRow.style.marginTop = '16px';
 
-  if (!cloud.isSignedIn()) {
+  // Primeira ligação com jogo já feito dos dois lados: quem manda é o
+  // utilizador, não nós.
+  if (cloud.hasPendingConflict()) {
+    screen.appendChild(makeEl('p', 'subtitle', 'Já há dados guardados na tua conta Google e também neste telemóvel, e são diferentes. Qual queres manter?'));
+
+    const keepRemote = makeEl('button', 'btn primary block', 'Usar os dados da conta Google ⬇️');
+    keepRemote.addEventListener('click', () => resolveCloudConflict('remote', keepRemote));
+    btnRow.appendChild(keepRemote);
+
+    const keepLocal = makeEl('button', 'btn secondary block', 'Usar os deste telemóvel ⬆️');
+    keepLocal.style.marginTop = '10px';
+    keepLocal.addEventListener('click', () => resolveCloudConflict('local', keepLocal));
+    btnRow.appendChild(keepLocal);
+
+    screen.appendChild(btnRow);
+    app.appendChild(screen);
+    return;
+  }
+
+  screen.appendChild(makeEl('p', 'subtitle', cloudStatusText()));
+
+  if (!cloud.isEnabled()) {
     const connectBtn = makeEl('button', 'btn primary block', 'Ligar conta Google');
     connectBtn.addEventListener('click', async () => {
+      connectBtn.disabled = true;
       try {
-        await cloud.signIn();
-        renderCloud();
+        await cloud.connect();
+        showToast('Conta ligada! A partir de agora guarda sozinho. ☁️');
       } catch (e) {
         showToast('Não foi possível ligar à conta Google.');
       }
+      renderCloud();
     });
     btnRow.appendChild(connectBtn);
   } else {
-    const backupBtn = makeEl('button', 'btn primary block', 'Guardar cópia agora ⬆️');
-    backupBtn.addEventListener('click', async () => {
-      backupBtn.disabled = true;
-      try {
-        await cloud.backupNow();
-        showToast('Cópia guardada no Google Drive! ☁️');
+    if (cloud.getStatus() === 'reconnect') {
+      const reconnectBtn = makeEl('button', 'btn primary block', 'Voltar a ligar a conta');
+      reconnectBtn.addEventListener('click', async () => {
+        reconnectBtn.disabled = true;
+        try {
+          await cloud.connect();
+          showToast('Ligação reposta! ☁️');
+        } catch (e) {
+          showToast('Não foi possível ligar à conta Google.');
+        }
         renderCloud();
-      } catch (e) {
-        showToast('Não foi possível guardar a cópia.');
-        backupBtn.disabled = false;
-      }
-    });
-    btnRow.appendChild(backupBtn);
+      });
+      btnRow.appendChild(reconnectBtn);
+    } else {
+      const syncBtn = makeEl('button', 'btn primary block', 'Sincronizar agora ↻');
+      syncBtn.addEventListener('click', async () => {
+        syncBtn.disabled = true;
+        try {
+          const result = await cloud.syncNow(true);
+          showToast(result.action === 'none' ? 'Já estava tudo sincronizado. ✅' : 'Sincronizado! ☁️');
+        } catch (e) {
+          showToast('Não foi possível sincronizar agora.');
+        }
+        renderCloud();
+      });
+      btnRow.appendChild(syncBtn);
+    }
 
     const restoreBtn = makeEl('button', 'btn secondary block', 'Restaurar do Google ⬇️');
     restoreBtn.style.marginTop = '10px';
     restoreBtn.addEventListener('click', async () => {
-      if (!confirm('Isto substitui os dados guardados neste telemóvel pelos dados do Google Drive. Continuar?')) return;
+      if (!confirm('Isto substitui os dados guardados neste telemóvel pelos dados da tua conta Google. Continuar?')) return;
       restoreBtn.disabled = true;
       try {
         await cloud.restoreNow();
@@ -945,7 +1009,8 @@ function renderCloud() {
     const disconnectBtn = makeEl('button', 'btn secondary block', 'Desligar conta');
     disconnectBtn.style.marginTop = '10px';
     disconnectBtn.addEventListener('click', () => {
-      cloud.signOut();
+      if (!confirm('O jogo deixa de guardar na tua conta Google. Os dados continuam neste telemóvel. Continuar?')) return;
+      cloud.disconnect();
       renderCloud();
     });
     btnRow.appendChild(disconnectBtn);
@@ -953,6 +1018,31 @@ function renderCloud() {
 
   screen.appendChild(btnRow);
   app.appendChild(screen);
+}
+
+function cloudStatusText() {
+  const lastSync = cloud.getLastSyncLabel();
+  if (!cloud.isEnabled()) return 'Conta Google ainda não ligada.';
+  if (cloud.getStatus() === 'reconnect') return 'O Google pediu para voltares a entrar. Até lá, o jogo continua a guardar tudo neste telemóvel.';
+  if (cloud.getStatus() === 'error') return 'A última sincronização falhou (talvez sem internet). Vai tentar outra vez sozinho.';
+  if (cloud.getStatus() === 'syncing') return 'A sincronizar…';
+  return lastSync ? `Sincronização automática ligada. Última: ${lastSync}` : 'Sincronização automática ligada.';
+}
+
+async function resolveCloudConflict(choice, btn) {
+  btn.disabled = true;
+  try {
+    await cloud.resolveConflict(choice);
+    if (choice === 'remote') {
+      showToast('Dados da conta Google aplicados! A recarregar…');
+      setTimeout(() => location.reload(), 800);
+      return;
+    }
+    showToast('Guardado na conta Google. ☁️');
+  } catch (e) {
+    showToast('Não foi possível concluir.');
+  }
+  renderCloud();
 }
 
 function escapeHtml(str) {

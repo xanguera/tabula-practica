@@ -23,6 +23,25 @@ function write(key, value) {
   } catch (e) {
     // localStorage indisponível (modo privado, quota) — falha em silêncio
   }
+  notifyChange();
+}
+
+// Quem quiser saber que os dados deste telemóvel mudaram (a sincronização
+// com o Drive, por exemplo) regista-se aqui.
+const changeListeners = [];
+
+export function onLocalChange(cb) {
+  changeListeners.push(cb);
+}
+
+function notifyChange() {
+  changeListeners.forEach((cb) => {
+    try {
+      cb();
+    } catch (e) {
+      // um ouvinte com erro não pode impedir o jogo de guardar
+    }
+  });
 }
 
 export function getProfiles() {
@@ -49,6 +68,7 @@ export function deleteProfile(id) {
   localStorage.removeItem(KEY_PROGRESS_PREFIX + id);
   localStorage.removeItem(KEY_ASSESSMENTS_PREFIX + id);
   localStorage.removeItem(KEY_REVIEW_PREFIX + id);
+  notifyChange();
   if (getActiveProfileId() === id) {
     setActiveProfileId(profiles.length ? profiles[0].id : null);
   }
@@ -61,6 +81,7 @@ export function getProfile(id) {
 export function setActiveProfileId(id) {
   if (id) localStorage.setItem(KEY_ACTIVE, id);
   else localStorage.removeItem(KEY_ACTIVE);
+  notifyChange();
 }
 
 export function getActiveProfileId() {

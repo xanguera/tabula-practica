@@ -1,0 +1,9 @@
+.assetsignore
+.cloudflare
+.git
+.gitignore
+.wrangler
+README.md
+plan
+tasks
+wrangler.jsonc

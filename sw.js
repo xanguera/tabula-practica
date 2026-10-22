@@ -1,7 +1,6 @@
-const CACHE_NAME = 'tabuada-divertida-v6';
+const CACHE_NAME = 'tabuada-divertida-v7';
 const ASSETS = [
   './',
-  './index.html',
   './manifest.json',
   './css/style.css',
   './js/app.js',
@@ -36,14 +35,21 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  // O servidor redireciona index.html para "./", e o browser recusa abrir uma
+  // página redirecionada que venha da cache. Quem instalou a app quando ela
+  // ainda abria em index.html recebe a página inicial diretamente.
+  const url = new URL(event.request.url);
+  const request = event.request.mode === 'navigate' && url.pathname.endsWith('/index.html')
+    ? new Request(new URL('./', self.registration.scope))
+    : event.request;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
+    caches.match(request).then((cached) => {
       if (cached) return cached;
-      return fetch(event.request)
+      return fetch(request)
         .then((response) => {
           if (response && response.ok && response.type === 'basic') {
             const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
           }
           return response;
         })

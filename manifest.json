@@ -2,7 +2,7 @@
   "name": "Tabuada Divertida",
   "short_name": "Tabuada",
   "description": "Aprende a tabuada de multiplicação a brincar!",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",

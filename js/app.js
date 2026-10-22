@@ -322,7 +322,7 @@ function renderCreateProfile() {
 
 // ---------- Topbar reutilizável ----------
 
-function buildTopbar(profile, { showBack, onBack, showHome = true, showAccount = true } = {}) {
+function buildTopbar(profile, { showBack, onBack, showHome = true, inRound = false } = {}) {
   const topbar = makeEl('div', 'topbar');
 
   const navGroup = makeEl('div', 'topbar-nav');
@@ -338,17 +338,23 @@ function buildTopbar(profile, { showBack, onBack, showHome = true, showAccount =
   }
   topbar.appendChild(navGroup);
 
-  const left = makeEl('div', 'player-chip');
+  // Fora de uma ronda, o jogador leva à escolha de jogador. A meio de uma
+  // ronda nem este nem o botão da conta reagem: um toque tirava a criança
+  // do jogo.
+  const left = makeEl(inRound ? 'div' : 'button', 'player-chip');
   left.appendChild(avatarBadge(profile.avatar));
   left.appendChild(makeEl('div', 'name', escapeHtml(profile.name)));
+  if (!inRound) {
+    left.setAttribute('aria-label', 'Trocar de jogador');
+    left.addEventListener('click', () => navigate('#/profiles'));
+  }
   topbar.appendChild(left);
 
   const right = makeEl('div', 'topbar-right');
   const streak = store.getDisplayStreak(profile.id);
   right.appendChild(makeEl('div', `streak-chip ${streak > 0 ? 'active' : ''}`, `🔥 ${streak}`));
   right.appendChild(makeEl('div', 'points-chip', `⭐ ${store.getTotalPoints(profile.id)}`));
-  // A meio de uma ronda não: um toque tirava a criança do jogo.
-  if (showAccount) right.appendChild(accountButton());
+  if (!inRound) right.appendChild(accountButton());
   topbar.appendChild(right);
 
   return topbar;
@@ -368,11 +374,7 @@ function renderMap() {
   clearApp();
 
   const screen = makeEl('div', 'screen');
-  screen.appendChild(buildTopbar(profile, {
-    showBack: true,
-    showHome: false,
-    onBack: () => navigate('#/profiles'),
-  }));
+  screen.appendChild(buildTopbar(profile, { showHome: false }));
 
   screen.appendChild(makeEl('h2', 'title-hero', 'O teu percurso'));
   screen.appendChild(makeEl('p', 'subtitle', 'Sobe de tabuada em tabuada!'));
@@ -515,7 +517,7 @@ function renderGameplay(worldId, stageIndex) {
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
     onBack: () => navigate(`#/world/${world.id}`),
-    showAccount: false,
+    inRound: true,
   }));
 
   const progressTrack = makeEl('div', 'progress-bar-track');
@@ -692,7 +694,7 @@ function renderAssessmentRun() {
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
     onBack: () => navigate('#/assessment'),
-    showAccount: false,
+    inRound: true,
   }));
 
   const progressTrack = makeEl('div', 'progress-bar-track');
@@ -879,7 +881,7 @@ function renderReviewRun() {
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
     onBack: () => navigate('#/review'),
-    showAccount: false,
+    inRound: true,
   }));
 
   const progressTrack = makeEl('div', 'progress-bar-track');

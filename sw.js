@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tabuada-divertida-v7';
+const CACHE_NAME = 'tabuada-divertida-v8';
 const ASSETS = [
   './',
   './manifest.json',

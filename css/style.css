@@ -204,7 +204,15 @@ h1, h2, h3, p { margin: 0; }
 /* A barra do jogador fica sempre numa linha: o nome encurta com "…" e,
    em telemóveis estreitos com dois botões à esquerda, mostra só o avatar. */
 .topbar:has(.topbar-right) { flex-wrap: nowrap; }
+.topbar-nav:empty { display: none; }
 .topbar .player-chip { min-width: 0; }
+button.player-chip {
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+button.player-chip:active { transform: scale(0.95); }
 .topbar .player-chip .name {
   min-width: 0;
   overflow: hidden;

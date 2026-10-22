@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tabuada-divertida-v4';
+const CACHE_NAME = 'tabuada-divertida-v5';
 const ASSETS = [
   './',
   './index.html',

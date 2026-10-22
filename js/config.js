@@ -18,7 +18,7 @@
 // Sem isto preenchido, o botão de sincronização fica desativado mas o
 // resto do jogo funciona normalmente (tudo continua a ser guardado no
 // próprio telemóvel).
-export const GOOGLE_CLIENT_ID = '';
+export const GOOGLE_CLIENT_ID = '952034216387-73gl9qqghqrbjp2jnmk8g5090rg0pkg9.apps.googleusercontent.com';
 
 // Âmbito mínimo possível: dá acesso apenas à "pasta de dados da aplicação"
 // (appDataFolder), uma pasta escondida e exclusiva deste jogo dentro do

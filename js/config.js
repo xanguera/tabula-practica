@@ -11,7 +11,7 @@
 //      (ou mantém em "Testing" e adiciona o teu email como utilizador de teste)
 //   4. "Credenciais" → "Criar credenciais" → "ID de cliente OAuth" →
 //      tipo "Aplicação Web" → em "Origens JavaScript autorizadas" adiciona
-//      o URL exacto onde o jogo fica publicado (ex.: https://tabuada.xavieranguera.com)
+//      o URL exacto onde o jogo fica publicado (ex.: https://tabula.xavieranguera.com)
 //   5. Copia o "Client ID" gerado (algo como "123...apps.googleusercontent.com")
 //      e cola-o abaixo, entre aspas.
 //

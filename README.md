@@ -2,7 +2,7 @@
 
 A free game that helps children learn their multiplication tables, from 1×1 to 10×10.
 
-Play it here: **https://tabuada.xavieranguera.com/**
+Play it here: **https://tabula.xavieranguera.com/**
 
 The game is in European Portuguese ("tabuada" is Portuguese for multiplication table). It was made for a 9-year-old, and it works best on a phone or tablet.
 

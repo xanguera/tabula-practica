@@ -330,21 +330,8 @@ export function buildAssessmentReport(answers) {
 }
 
 /**
- * A partir de um relatório, sugere em que tabuada a criança deveria
- * continuar a praticar: a primeira (mais baixa) que ainda não está
- * "forte" — como um teste de nivelamento, para não deixar buracos.
- * Se estiver tudo forte, sugere o Desafio Final.
- */
-export function suggestPlacementWorld(report) {
-  if (!report || !report.tableStats || report.tableStats.length === 0) return null;
-  const gap = report.tableStats.find((t) => t.status !== 'forte');
-  if (gap) return String(gap.table);
-  return FINAL_WORLD_ID;
-}
-
-/**
  * Gera perguntas para a Revisão Diária: mistura de tabuadas já
- * desbloqueadas, com preferência (60%) pelas tabuadas indicadas como
+ * praticadas ou sabidas, com preferência (60%) pelas tabuadas indicadas como
  * mais fracas (por exemplo, vindas do último teste de avaliação).
  */
 export function generateReviewQuestions(availableTables, priorityTables = [], count = 10) {

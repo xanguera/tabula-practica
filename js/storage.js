@@ -1,12 +1,14 @@
 // ---------- Persistência local (perfis, progresso) ----------
-import { WORLDS, worldIndex, stagesForWorld, getWorld } from './data.js';
+import { WORLDS, stagesForWorld, getWorld } from './data.js';
 
 const KEY_PROFILES = 'td_profiles_v1';
 const KEY_ACTIVE = 'td_active_profile_v1';
 const KEY_PROGRESS_PREFIX = 'td_progress_v1_';
 const KEY_ASSESSMENTS_PREFIX = 'td_assessments_v1_';
 const KEY_REVIEW_PREFIX = 'td_review_v1_';
+const KEY_PLACEMENTS_PREFIX = 'td_placements_v1_';
 const MAX_ASSESSMENT_HISTORY = 50;
+const MAX_PLACEMENT_HISTORY = 20;
 
 function read(key, fallback) {
   try {
@@ -68,6 +70,7 @@ export function deleteProfile(id) {
   localStorage.removeItem(KEY_PROGRESS_PREFIX + id);
   localStorage.removeItem(KEY_ASSESSMENTS_PREFIX + id);
   localStorage.removeItem(KEY_REVIEW_PREFIX + id);
+  localStorage.removeItem(KEY_PLACEMENTS_PREFIX + id);
   notifyChange();
   if (getActiveProfileId() === id) {
     setActiveProfileId(profiles.length ? profiles[0].id : null);
@@ -156,28 +159,57 @@ export function isWorldFullyStarred(profileId, worldId) {
   return stages.every((_, i) => world.stages[i] && world.stages[i].stars > 0);
 }
 
-export function isWorldUnlocked(profileId, worldId) {
-  const idx = worldIndex(worldId);
-  if (idx === 0) return true;
-  const progress = getProgress(profileId);
-  if (progress.placementUnlocks && progress.placementUnlocks[worldId]) return true;
-  const prevWorld = WORLDS[idx - 1];
-  return isWorldFullyStarred(profileId, prevWorld.id);
+// ---------- Estado de cada tabuada no mapa ----------
+// Todas as tabuadas e todos os estágios estão abertos: a criança pratica o
+// que quiser. O mapa só mostra em que ponto está cada uma.
+
+export function hasAnyStars(profileId, worldId) {
+  return getWorldStars(profileId, worldId) > 0;
+}
+
+/** Tabuadas que o teste de colocação mostrou que a criança já sabe. */
+export function isWorldKnown(profileId, worldId) {
+  const known = getProgress(profileId).knownTables;
+  return !!(known && known[worldId]);
+}
+
+/** A primeira tabuada, por ordem, que não está feita nem já sabida. */
+export function getNextWorldId(profileId) {
+  const next = WORLDS.find((w) => !isWorldFullyStarred(profileId, w.id) && !isWorldKnown(profileId, w.id));
+  return next ? next.id : null;
+}
+
+/** 'done' | 'known' | 'next' | 'started' | 'new' */
+export function getWorldState(profileId, worldId) {
+  if (isWorldFullyStarred(profileId, worldId)) return 'done';
+  if (isWorldKnown(profileId, worldId)) return 'known';
+  if (getNextWorldId(profileId) === worldId) return 'next';
+  return hasAnyStars(profileId, worldId) ? 'started' : 'new';
 }
 
 /**
- * Usado pelo teste de avaliação: quando a criança decide "saltar" para a
- * tabuada sugerida, desbloqueamos essa tabuada e todas as anteriores
- * (como um teste de nivelamento), para o mapa não mostrar buracos.
+ * Aceitar o resultado do teste de colocação: estas tabuadas passam a contar
+ * como sabidas. Só acrescenta — nunca tira nada que já lá estivesse.
  */
-export function unlockWorldsUpTo(profileId, worldId) {
-  const idx = worldIndex(worldId);
-  if (idx < 0) return;
+export function markTablesKnown(profileId, tables) {
   const progress = getProgress(profileId);
-  progress.placementUnlocks = progress.placementUnlocks || {};
-  for (let i = 0; i <= idx; i++) {
-    progress.placementUnlocks[WORLDS[i].id] = true;
-  }
+  progress.knownTables = progress.knownTables || {};
+  const today = new Date().toISOString();
+  tables.forEach((t) => {
+    const id = String(t);
+    if (!progress.knownTables[id]) progress.knownTables[id] = today;
+  });
+  saveProgress(profileId, progress);
+}
+
+/** O convite ao teste de colocação no mapa aparece uma só vez por jogador. */
+export function isPlacementCardDismissed(profileId) {
+  return !!getProgress(profileId).placementCardDismissed;
+}
+
+export function dismissPlacementCard(profileId) {
+  const progress = getProgress(profileId);
+  progress.placementCardDismissed = true;
   saveProgress(profileId, progress);
 }
 
@@ -186,13 +218,6 @@ export function addBonusPoints(profileId, points) {
   progress.totalPoints = (progress.totalPoints || 0) + points;
   saveProgress(profileId, progress);
   return progress.totalPoints;
-}
-
-export function isStageUnlocked(profileId, worldId, stageIndex) {
-  if (!isWorldUnlocked(profileId, worldId)) return false;
-  if (stageIndex === 0) return true;
-  const state = getStageState(profileId, worldId, stageIndex - 1);
-  return !!(state && state.stars > 0);
 }
 
 export function getTotalPoints(profileId) {
@@ -223,6 +248,34 @@ export function saveAssessment(profileId, record) {
   if (list.length > MAX_ASSESSMENT_HISTORY) list.length = MAX_ASSESSMENT_HISTORY;
   write(KEY_ASSESSMENTS_PREFIX + profileId, list);
   return record;
+}
+
+// ---------- Histórico do teste de colocação ----------
+// Guarda todas as respostas com os tempos, para se poder ver mais tarde
+// como a criança respondeu. Na interface nunca se mostram os tempos.
+
+export function getPlacements(profileId) {
+  return read(KEY_PLACEMENTS_PREFIX + profileId, []);
+}
+
+export function getPlacement(profileId, id) {
+  return getPlacements(profileId).find((p) => p.id === id) || null;
+}
+
+export function savePlacement(profileId, record) {
+  const list = getPlacements(profileId);
+  list.unshift(record);
+  if (list.length > MAX_PLACEMENT_HISTORY) list.length = MAX_PLACEMENT_HISTORY;
+  write(KEY_PLACEMENTS_PREFIX + profileId, list);
+  return record;
+}
+
+export function setPlacementAccepted(profileId, id, accepted) {
+  const list = getPlacements(profileId);
+  const record = list.find((p) => p.id === id);
+  if (!record) return;
+  record.accepted = accepted;
+  write(KEY_PLACEMENTS_PREFIX + profileId, list);
 }
 
 // ---------- Revisão diária / sequência (streak) ----------

@@ -230,7 +230,8 @@ export function renderTypeQuestion(container, question, timed, onResolve) {
         points += Math.round(remaining * 10);
       }
     }
-    onResolve({ correct: isCorrect, points, elapsedMs });
+    const given = typed.length ? Number(typed) : null; // null: o tempo acabou
+    onResolve({ correct: isCorrect, points, elapsedMs, given });
   }
 }
 

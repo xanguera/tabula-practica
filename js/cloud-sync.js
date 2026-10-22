@@ -16,7 +16,7 @@
 import { GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPE, GOOGLE_PROFILE_SCOPE, BACKUP_FILE_NAME } from './config.js';
 import { onLocalChange } from './storage.js';
 
-const STORAGE_PREFIXES = ['td_profiles_v1', 'td_active_profile_v1', 'td_progress_v1_', 'td_assessments_v1_', 'td_review_v1_'];
+const STORAGE_PREFIXES = ['td_profiles_v1', 'td_active_profile_v1', 'td_progress_v1_', 'td_assessments_v1_', 'td_review_v1_', 'td_placements_v1_'];
 const KEY_FILE_ID = 'td_drive_file_id_v1';
 const KEY_LAST_SYNC = 'td_last_sync_v1';       // "savedAt" da cópia remota que este telemóvel já tem
 const KEY_LOCAL_CHANGE = 'td_local_change_v1'; // última alteração feita neste telemóvel

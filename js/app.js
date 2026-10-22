@@ -1,10 +1,11 @@
 import {
   AVATARS, getAvatar, WORLDS, getWorld, stagesForWorld,
   generateQuestions, calcStars, generateAssessmentQuestions, buildAssessmentReport,
-  TABLE_STATUS_LABELS, suggestPlacementWorld, generateReviewQuestions,
+  TABLE_STATUS_LABELS, generateReviewQuestions,
 } from './data.js';
 import * as store from './storage.js';
-import { runStage } from './exercises.js';
+import { runStage, renderTypeQuestion } from './exercises.js';
+import { createPlacement, nextQuestion, recordAnswer, getResult } from './placement.js';
 import { runAssessment } from './assessment.js';
 import { runReview } from './review.js';
 import { shareReport, formatDuration } from './report.js';
@@ -26,10 +27,6 @@ function showToast(msg) {
 // Guarda o último resultado de estágio para passar para o ecrã de resultado
 let lastResult = null;
 let pendingCreateAvatar = AVATARS[0].id;
-// Marca o id do teste de avaliação que acabou de ser concluído, para o
-// relatório saber se deve oferecer a sugestão de salto (só faz sentido
-// logo a seguir ao teste, não ao reabrir um relatório do histórico)
-let freshAssessmentId = null;
 
 function navigate(hash) {
   if (location.hash === hash) render();
@@ -60,6 +57,7 @@ function isSafeToReplaceData() {
   const parts = parseRoute();
   if (parts[0] === 'stage') return false;
   if (parts[0] === 'assessment' && parts[1] === 'run') return false;
+  if (parts[0] === 'placement' && parts[1] !== 'result') return false;
   if (parts[0] === 'review' && parts[1] === 'run') return false;
   return true;
 }
@@ -115,6 +113,11 @@ function render() {
   if (route === 'world') return renderStageList(parts[1]);
   if (route === 'stage') return renderGameplay(parts[1], Number(parts[2]));
   if (route === 'result') return renderResult();
+  if (route === 'tests') return renderTestsHub();
+  if (route === 'placement') {
+    if (parts[1] === 'result') return renderPlacementResult(parts[2]);
+    return renderPlacementRun();
+  }
   if (route === 'assessment') {
     if (parts[1] === 'run') return renderAssessmentRun();
     if (parts[1] === 'report') return renderAssessmentReport(parts[2]);
@@ -377,7 +380,30 @@ function renderMap() {
   screen.appendChild(buildTopbar(profile, { showHome: false }));
 
   screen.appendChild(makeEl('h2', 'title-hero', 'O teu percurso'));
-  screen.appendChild(makeEl('p', 'subtitle', 'Sobe de tabuada em tabuada!'));
+  screen.appendChild(makeEl('p', 'subtitle', 'Escolhe uma tabuada e pratica!'));
+
+  // Convite ao teste de colocação: só para quem ainda não começou e nunca
+  // o fez, e só até dizer "agora não".
+  const isNewPlayer = WORLDS.every((w) => !store.hasAnyStars(profile.id, w.id));
+  if (isNewPlayer && !store.getPlacements(profile.id).length && !store.isPlacementCardDismissed(profile.id)) {
+    const card = makeEl('div', 'placement-card');
+    card.appendChild(makeEl('p', 'placement-text', 'Já sabes alguma tabuada? Descobre onde começar 🎯'));
+    const row = makeEl('div', 'btn-row');
+    const go = makeEl('button', 'btn primary', 'Fazer o teste');
+    go.addEventListener('click', () => {
+      playClick();
+      navigate('#/placement/run');
+    });
+    const later = makeEl('button', 'btn secondary', 'Agora não');
+    later.addEventListener('click', () => {
+      store.dismissPlacementCard(profile.id);
+      card.remove();
+    });
+    row.appendChild(go);
+    row.appendChild(later);
+    card.appendChild(row);
+    screen.appendChild(card);
+  }
 
   const streak = store.getDisplayStreak(profile.id);
   const reviewBtn = makeEl('button', 'btn review-entry block', `🔁 Revisão Diária${streak > 0 ? ` · 🔥${streak}` : ''}`);
@@ -387,43 +413,33 @@ function renderMap() {
   });
   screen.appendChild(reviewBtn);
 
-  const assessmentBtn = makeEl('button', 'btn assessment-entry block', '📋 Teste de Avaliação');
-  assessmentBtn.addEventListener('click', () => {
+  const testsBtn = makeEl('button', 'btn assessment-entry block', '📋 Testes');
+  testsBtn.addEventListener('click', () => {
     playClick();
-    navigate('#/assessment');
+    navigate('#/tests');
   });
-  screen.appendChild(assessmentBtn);
+  screen.appendChild(testsBtn);
 
   const scroll = makeEl('div', 'map-scroll');
   const path = makeEl('div', 'map-path');
 
-  let firstUnlockedNotStarred = null;
+  // Tudo está aberto. Cada tabuada mostra só em que ponto está: feita (✓),
+  // já sabida pelo teste de colocação (🎯), a próxima, ou por fazer.
+  const BADGES = { done: '✓', known: '🎯' };
+  const nextId = store.getNextWorldId(profile.id);
 
   WORLDS.forEach((world, i) => {
-    const unlocked = store.isWorldUnlocked(profile.id, world.id);
+    const state = store.getWorldState(profile.id, world.id);
     const stars = store.getWorldStars(profile.id, world.id);
     const maxStars = stagesForWorld(world).length * 3;
-    const fullyStarred = store.isWorldFullyStarred(profile.id, world.id);
-
-    if (unlocked && !fullyStarred && !firstUnlockedNotStarred) {
-      firstUnlockedNotStarred = world.id;
-    }
 
     const wrap = makeEl('div', 'world-node-wrap');
-    const node = makeEl('div', `world-node ${unlocked ? '' : 'locked'} ${world.isFinal ? 'final' : ''}`);
-    if (unlocked) {
-      node.appendChild(makeEl('div', '', world.isFinal ? '🏆' : String(world.table)));
-      if (!world.isFinal) node.appendChild(makeEl('div', 'table-label', `× ${world.table}`));
-    } else {
-      node.appendChild(makeEl('div', 'lock-icon', '🔒'));
-    }
+    const node = makeEl('div', `world-node state-${state} ${world.isFinal ? 'final' : ''}`);
+    node.appendChild(makeEl('div', '', world.isFinal ? '🏆' : String(world.table)));
+    if (!world.isFinal) node.appendChild(makeEl('div', 'table-label', `× ${world.table}`));
+    if (BADGES[state]) node.appendChild(makeEl('span', 'world-badge', BADGES[state]));
     node.dataset.id = world.id;
     node.addEventListener('click', () => {
-      if (!unlocked) {
-        playClick();
-        showToast('Termina a tabuada anterior primeiro! 💪');
-        return;
-      }
       playClick();
       navigate(`#/world/${world.id}`);
     });
@@ -446,7 +462,7 @@ function renderMap() {
   screen.appendChild(scroll);
   app.appendChild(screen);
 
-  const targetId = firstUnlockedNotStarred || (WORLDS.find((w) => store.isWorldUnlocked(profile.id, w.id)) || WORLDS[0]).id;
+  const targetId = nextId || WORLDS[0].id;
   requestAnimationFrame(() => {
     const targetEl = path.querySelector(`.world-node[data-id="${targetId}"]`);
     if (targetEl) targetEl.scrollIntoView({ block: 'center' });
@@ -474,10 +490,12 @@ function renderStageList(worldId) {
   const list = makeEl('div', 'stage-list');
   const stages = stagesForWorld(world);
   stages.forEach((stageDef, index) => {
-    const unlocked = store.isStageUnlocked(profile.id, world.id, index);
     const state = store.getStageState(profile.id, world.id, index);
-    const card = makeEl('div', `stage-card ${unlocked ? '' : 'locked'}`);
-    card.appendChild(makeEl('div', 'stage-icon', stageDef.icon));
+    const done = !!(state && state.stars > 0);
+    const card = makeEl('div', `stage-card ${done ? 'done' : ''}`);
+    const icon = makeEl('div', 'stage-icon', stageDef.icon);
+    if (done) icon.appendChild(makeEl('span', 'stage-done', '✓'));
+    card.appendChild(icon);
     const info = makeEl('div', 'stage-info');
     info.appendChild(makeEl('div', 'stage-name', stageDef.name));
     info.appendChild(makeEl('div', 'stage-desc', stageDef.desc));
@@ -491,7 +509,6 @@ function renderStageList(worldId) {
     card.appendChild(starsRow);
 
     card.addEventListener('click', () => {
-      if (!unlocked) return;
       playClick();
       navigate(`#/stage/${world.id}/${index}`);
     });
@@ -595,7 +612,7 @@ function renderResult() {
   if (gameFullyComplete) {
     screen.appendChild(makeEl('div', 'result-sub', '🏆 Completaste TODA a tabuada! És um campeão! 🏆'));
   } else if (worldJustCompleted) {
-    screen.appendChild(makeEl('div', 'result-sub', '🎊 Mundo completo! Próxima tabuada desbloqueada! 🎊'));
+    screen.appendChild(makeEl('div', 'result-sub', '🎊 Tabuada completa! 🎊'));
   }
 
   const btnRow = makeEl('div', 'btn-row');
@@ -639,7 +656,7 @@ function renderAssessmentHub() {
   const screen = makeEl('div', 'screen');
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
-    onBack: () => navigate('#/map'),
+    onBack: () => navigate('#/tests'),
   }));
 
   screen.appendChild(makeEl('div', 'mascot', '🧪'));
@@ -680,6 +697,191 @@ function renderAssessmentHub() {
     screen.appendChild(list);
   }
 
+  app.appendChild(screen);
+}
+
+// ---------- Ecrã: Testes (colocação e avaliação) ----------
+
+function renderTestsHub() {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/map'),
+  }));
+
+  screen.appendChild(makeEl('div', 'mascot', '📋'));
+  screen.appendChild(makeEl('h2', 'title-hero', 'Testes'));
+
+  const list = makeEl('div', 'stage-list');
+  const tests = [
+    {
+      icon: '🎯',
+      name: 'Onde começo?',
+      desc: 'Poucas perguntas para descobrir em que tabuada começar.',
+      hash: '#/placement/run',
+    },
+    {
+      icon: '🧪',
+      name: 'Teste de Avaliação',
+      desc: 'Vê em que tabuadas já és um crack e acompanha o progresso.',
+      hash: '#/assessment',
+    },
+  ];
+  tests.forEach((t) => {
+    const card = makeEl('div', 'stage-card');
+    card.appendChild(makeEl('div', 'stage-icon', t.icon));
+    const info = makeEl('div', 'stage-info');
+    info.appendChild(makeEl('div', 'stage-name', t.name));
+    info.appendChild(makeEl('div', 'stage-desc', t.desc));
+    card.appendChild(info);
+    card.addEventListener('click', () => {
+      playClick();
+      navigate(t.hash);
+    });
+    list.appendChild(card);
+  });
+  screen.appendChild(list);
+
+  app.appendChild(screen);
+}
+
+// ---------- Ecrã: teste de colocação em curso ----------
+// Perguntas uma a uma, sem relógio à vista. O tempo de cada resposta é
+// medido e guardado em segundo plano (ver placement.js).
+
+function renderPlacementRun() {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/tests'),
+    inRound: true,
+  }));
+
+  screen.appendChild(makeEl('h2', 'title-hero', '🎯 Onde começo?'));
+  const hint = makeEl('p', 'question-hint center-text', '');
+  screen.appendChild(hint);
+  const content = makeEl('div', 'exercise-content');
+  screen.appendChild(content);
+  app.appendChild(screen);
+
+  const state = createPlacement();
+
+  function ask() {
+    // Se a criança saiu do teste a meio, não continuamos a desenhar.
+    if (!app.contains(content)) return;
+    const q = nextQuestion(state);
+    if (!q) {
+      finish();
+      return;
+    }
+    hint.textContent = q.warmup
+      ? 'Primeiro, uma fácil para aquecer!'
+      : 'Sem pressa, escreve a resposta que achares certa.';
+    renderTypeQuestion(content, q, false, (result) => {
+      recordAnswer(state, q, result);
+      setTimeout(ask, 500);
+    });
+  }
+
+  function finish() {
+    const result = getResult(state);
+    const record = {
+      id: 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      dateISO: new Date().toISOString(),
+      startTable: result.startTable,
+      allKnown: result.allKnown,
+      knownTables: result.knownTables,
+      accepted: null,
+      typingAllowanceMs: state.typingAllowanceMs,
+      stopReason: state.stopReason,
+      answers: state.answers,
+    };
+    store.savePlacement(profile.id, record);
+    navigate(`#/placement/result/${record.id}`);
+  }
+
+  ask();
+}
+
+// ---------- Ecrã: resultado do teste de colocação ----------
+
+function renderPlacementResult(id) {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  const record = store.getPlacement(profile.id, id);
+  if (!record) { navigate('#/tests'); return; }
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate('#/map'),
+  }));
+
+  const btnRow = makeEl('div', 'btn-row');
+  btnRow.style.flexDirection = 'column';
+  btnRow.style.width = '100%';
+  btnRow.style.marginTop = '20px';
+
+  if (record.allKnown) {
+    screen.appendChild(makeEl('div', 'mascot', '🏆'));
+    screen.appendChild(makeEl('h2', 'title-hero', 'Já sabes todas!'));
+    screen.appendChild(makeEl('p', 'subtitle', 'Experimenta o Desafio Final, que mistura todas as tabuadas.'));
+    const finalBtn = makeEl('button', 'btn primary block', 'Ir para o Desafio Final 🚀');
+    finalBtn.addEventListener('click', () => {
+      playClick();
+      navigate('#/world/final');
+    });
+    btnRow.appendChild(finalBtn);
+  } else {
+    const n = record.startTable;
+    screen.appendChild(makeEl('div', 'mascot', '🎯'));
+    screen.appendChild(makeEl('h2', 'title-hero', `Recomendamos começar na tabuada do ${n}`));
+    screen.appendChild(makeEl('p', 'subtitle', n > 1
+      ? `Muito bem! As tabuadas do 1 ao ${n - 1} já estão no papo.`
+      : 'Vamos aprender juntos, desde o início!'));
+
+    if (record.accepted === null) {
+      const yesBtn = makeEl('button', 'btn primary block', n > 1 ? 'Sim, saltar para lá! 🚀' : 'Começar na tabuada do 1 🚀');
+      yesBtn.addEventListener('click', () => {
+        store.markTablesKnown(profile.id, record.knownTables);
+        store.setPlacementAccepted(profile.id, record.id, true);
+        playFanfare();
+        navigate(`#/world/${n}`);
+      });
+      btnRow.appendChild(yesBtn);
+
+      const noBtn = makeEl('button', 'btn secondary block', 'Não, obrigado');
+      noBtn.style.marginTop = '10px';
+      noBtn.addEventListener('click', () => {
+        store.setPlacementAccepted(profile.id, record.id, false);
+        navigate('#/map');
+      });
+      btnRow.appendChild(noBtn);
+    } else {
+      const goBtn = makeEl('button', 'btn primary block', `Ir para a tabuada do ${n}`);
+      goBtn.addEventListener('click', () => {
+        playClick();
+        navigate(`#/world/${n}`);
+      });
+      btnRow.appendChild(goBtn);
+    }
+  }
+
+  const mapBtn = makeEl('button', 'btn secondary block', 'Voltar ao mapa');
+  mapBtn.style.marginTop = '10px';
+  mapBtn.addEventListener('click', () => navigate('#/map'));
+  if (record.allKnown || record.accepted !== null) btnRow.appendChild(mapBtn);
+
+  screen.appendChild(btnRow);
   app.appendChild(screen);
 }
 
@@ -724,7 +926,6 @@ function renderAssessmentRun() {
         ...report,
       };
       store.saveAssessment(profile.id, record);
-      freshAssessmentId = record.id;
       navigate(`#/assessment/report/${record.id}`);
     },
   });
@@ -775,38 +976,17 @@ function renderAssessmentReport(id) {
     screen.appendChild(makeEl('div', 'report-note weak', `📌 A praticar: tabuada do ${record.weak.join(', ')}`));
   }
 
-  const isFresh = freshAssessmentId === record.id;
-  freshAssessmentId = null;
-
-  if (isFresh) {
-    const suggestedId = suggestPlacementWorld(record);
-    if (suggestedId && !store.isWorldUnlocked(profile.id, suggestedId)) {
-      const suggestedWorld = getWorld(suggestedId);
-      const label = suggestedWorld.isFinal ? 'o Desafio Final' : `a Tabuada do ${suggestedWorld.table}`;
-      const card = makeEl('div', 'placement-card');
-      card.appendChild(makeEl('div', 'placement-text', `💡 Com base no teste, parece que estás pronto para ${label}! Queres saltar já para lá?`));
-
-      const row = makeEl('div', 'btn-row');
-      row.style.flexDirection = 'column';
-      row.style.width = '100%';
-      row.style.marginTop = '10px';
-
-      const yesBtn = makeEl('button', 'btn primary block', 'Sim, vamos lá! 🚀');
-      yesBtn.addEventListener('click', () => {
-        store.unlockWorldsUpTo(profile.id, suggestedId);
-        playFanfare();
-        navigate(`#/world/${suggestedId}`);
-      });
-      row.appendChild(yesBtn);
-
-      const noBtn = makeEl('button', 'btn secondary block', 'Não, continuar como está');
-      noBtn.style.marginTop = '8px';
-      noBtn.addEventListener('click', () => card.remove());
-      row.appendChild(noBtn);
-
-      card.appendChild(row);
-      screen.appendChild(card);
-    }
+  // A tabuada mais fraca fica a um toque. Quem decide onde começar é o
+  // teste de colocação; este relatório só aponta o que praticar.
+  if (record.weak.length) {
+    const weakest = String(record.weak[0]);
+    const practiceBtn = makeEl('button', 'btn primary block', `Pratica a tabuada do ${weakest} 💪`);
+    practiceBtn.style.marginTop = '14px';
+    practiceBtn.addEventListener('click', () => {
+      playClick();
+      navigate(`#/world/${weakest}`);
+    });
+    screen.appendChild(practiceBtn);
   }
 
   const btnRow = makeEl('div', 'btn-row');
@@ -894,10 +1074,15 @@ function renderReviewRun() {
   screen.appendChild(content);
   app.appendChild(screen);
 
-  const unlockedTables = WORLDS.filter((w) => !w.isFinal && store.isWorldUnlocked(profile.id, w.id)).map((w) => w.table);
+  // Revê o que já foi praticado ou já se sabe; quem ainda não começou
+  // revê as duas primeiras tabuadas.
+  const practisedTables = WORLDS
+    .filter((w) => !w.isFinal && ['done', 'known', 'started'].includes(store.getWorldState(profile.id, w.id)))
+    .map((w) => w.table);
+  const reviewTables = practisedTables.length ? practisedTables : [1, 2];
   const assessments = store.getAssessments(profile.id);
   const priorityTables = assessments.length ? assessments[0].weak : [];
-  const questions = generateReviewQuestions(unlockedTables, priorityTables, 10);
+  const questions = generateReviewQuestions(reviewTables, priorityTables, 10);
 
   runReview(content, questions, {
     onProgress: ({ index, total }) => {

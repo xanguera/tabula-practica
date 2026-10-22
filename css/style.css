@@ -455,12 +455,36 @@ button.player-chip:active { transform: scale(0.95); }
   margin: 8px 0;
 }
 .world-node:active { transform: translateY(4px); box-shadow: 0 3px 0 rgba(0,0,0,0.25); }
-.world-node.locked {
-  background: rgba(255,255,255,0.08);
-  color: var(--ink-dim);
+/* Estados no mapa. Tudo está aberto; a cor diz em que ponto está cada
+   tabuada: feita (verde ✓), já sabida pelo teste (azul 🎯), a próxima
+   (laranja, a pulsar) e por fazer (discreta). */
+.world-node.state-new,
+.world-node.state-started {
+  background: rgba(255,255,255,0.12);
   box-shadow: 0 7px 0 rgba(0,0,0,0.15);
 }
-.world-node .lock-icon { font-size: 1.5rem; }
+.world-node.state-done { background: linear-gradient(160deg, var(--green), var(--green-dark)); }
+.world-node.state-known { background: linear-gradient(160deg, var(--blue), #2f8fd8); }
+.world-node.state-next { animation: nextPulse 1.8s ease-in-out infinite; }
+@keyframes nextPulse {
+  0%, 100% { box-shadow: 0 7px 0 rgba(0,0,0,0.25), 0 0 0 0 rgba(255, 145, 77, 0.55); }
+  50% { box-shadow: 0 7px 0 rgba(0,0,0,0.25), 0 0 0 12px rgba(255, 145, 77, 0); }
+}
+.world-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--green-dark);
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
 .world-node .table-label { font-size: .65rem; font-weight: 700; opacity: .85; margin-top: -2px; }
 
 .world-node.final { background: linear-gradient(160deg, #ffd65c, #ff5c8d); width: 106px; height: 106px; }
@@ -499,7 +523,7 @@ button.player-chip:active { transform: scale(0.95); }
   cursor: pointer;
   border: 2px solid transparent;
 }
-.stage-card.locked { opacity: .45; pointer-events: none; }
+.stage-card.done { border-color: rgba(61, 220, 132, 0.45); }
 .stage-card:active { transform: scale(0.98); }
 
 .stage-icon {
@@ -512,6 +536,22 @@ button.player-chip:active { transform: scale(0.95); }
   font-size: 1.5rem;
   background: rgba(255,255,255,0.12);
   flex-shrink: 0;
+}
+.stage-icon { position: relative; }
+.stage-done {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .stage-info { flex: 1; }

@@ -13,7 +13,7 @@
 // A sincronização é automática: ao abrir o jogo e sempre que os dados
 // locais mudam (fim de um estágio, teste, revisão...). O utilizador só vê
 // o Google uma vez, quando liga a conta.
-import { GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPE, BACKUP_FILE_NAME } from './config.js';
+import { GOOGLE_CLIENT_ID, GOOGLE_DRIVE_SCOPE, GOOGLE_PROFILE_SCOPE, BACKUP_FILE_NAME } from './config.js';
 import { onLocalChange } from './storage.js';
 
 const STORAGE_PREFIXES = ['td_profiles_v1', 'td_active_profile_v1', 'td_progress_v1_', 'td_assessments_v1_', 'td_review_v1_'];
@@ -21,6 +21,7 @@ const KEY_FILE_ID = 'td_drive_file_id_v1';
 const KEY_LAST_SYNC = 'td_last_sync_v1';       // "savedAt" da cópia remota que este telemóvel já tem
 const KEY_LOCAL_CHANGE = 'td_local_change_v1'; // última alteração feita neste telemóvel
 const KEY_ENABLED = 'td_cloud_enabled_v1';
+const KEY_ACCOUNT = 'td_google_account_v1';    // { name, picture } da conta ligada
 
 // Espera um pouco depois de uma alteração antes de enviar, para não fazer
 // um pedido por cada resposta certa — no fim de um estágio há várias
@@ -58,6 +59,16 @@ export function getStatus() {
 
 export function hasPendingConflict() {
   return pendingConflict;
+}
+
+/** Nome e fotografia da conta ligada, ou null se ainda não os temos. */
+export function getAccount() {
+  if (!isEnabled()) return null;
+  try {
+    return JSON.parse(localStorage.getItem(KEY_ACCOUNT) || 'null');
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
@@ -133,7 +144,7 @@ function requestToken(prompt) {
     if (!tokenClient) {
       tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
-        scope: GOOGLE_DRIVE_SCOPE,
+        scope: `${GOOGLE_DRIVE_SCOPE} ${GOOGLE_PROFILE_SCOPE}`,
         callback: () => {},
         error_callback: () => {},
       });
@@ -143,14 +154,34 @@ function requestToken(prompt) {
         reject(new Error(response.error));
         return;
       }
+      // O Google deixa desmarcar cada permissão. Sem o Drive não há nada
+      // que possamos fazer; sem o perfil só não há fotografia.
+      const oauth2 = window.google.accounts.oauth2;
+      if (!oauth2.hasGrantedAllScopes(response, GOOGLE_DRIVE_SCOPE)) {
+        reject(new Error('drive-not-granted'));
+        return;
+      }
       accessToken = response.access_token;
       // Tiramos um minuto de margem para não usar um token quase a expirar.
       tokenExpiresAt = Date.now() + (Number(response.expires_in || 3600) - 60) * 1000;
+      if (oauth2.hasGrantedAllScopes(response, GOOGLE_PROFILE_SCOPE) && !localStorage.getItem(KEY_ACCOUNT)) {
+        fetchAccount().catch(() => {});
+      }
       resolve(accessToken);
     };
     tokenClient.error_callback = (err) => reject(new Error((err && err.type) || 'token-failed'));
     tokenClient.requestAccessToken({ prompt });
   });
+}
+
+async function fetchAccount() {
+  const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return;
+  const info = await res.json();
+  localStorage.setItem(KEY_ACCOUNT, JSON.stringify({ name: info.name || '', picture: info.picture || '' }));
+  emit({ type: 'account' });
 }
 
 async function ensureToken(interactive) {
@@ -177,7 +208,9 @@ export function disconnect() {
   pendingConflict = false;
   localStorage.removeItem(KEY_ENABLED);
   localStorage.removeItem(KEY_FILE_ID);
+  localStorage.removeItem(KEY_ACCOUNT);
   setStatus('off');
+  emit({ type: 'account' });
 }
 
 // ---------- Acesso ao Drive (pasta escondida da app) ----------

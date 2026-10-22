@@ -26,4 +26,8 @@ export const GOOGLE_CLIENT_ID = '952034216387-73gl9qqghqrbjp2jnmk8g5090rg0pkg9.a
 // e nenhuma outra app consegue ler esta pasta.
 export const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 
+// Nome e fotografia da conta, só para mostrar no canto do ecrã quem está
+// ligado. Ficam neste telemóvel e não vão para mais lado nenhum.
+export const GOOGLE_PROFILE_SCOPE = 'https://www.googleapis.com/auth/userinfo.profile';
+
 export const BACKUP_FILE_NAME = 'tabuada-divertida-backup.json';

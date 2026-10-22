@@ -74,9 +74,10 @@ function startCloudSync() {
       render();
       return;
     }
-    // O estado (a sincronizar / a precisar de nova ligação) só se vê no
-    // ecrã da nuvem, por isso só vale a pena redesenhar quando lá estamos.
+    // O ecrã da nuvem mostra o estado todo; nos outros só muda o botão da
+    // conta no canto, por isso trocamos apenas esse.
     if (parseRoute()[0] === 'cloud') renderCloud();
+    else refreshAccountButtons();
   });
 
   cloud.init();
@@ -139,6 +140,49 @@ function makeEl(tag, className, html) {
   return e;
 }
 
+// ---------- Botão da conta Google (canto superior direito) ----------
+
+function cloudNeedsAttention() {
+  return cloud.getStatus() === 'reconnect' || cloud.hasPendingConflict();
+}
+
+/**
+ * "G" antes de ligar; a fotografia da conta depois (ou a inicial do nome,
+ * se a fotografia não carregar, por exemplo sem internet). Um ponto de
+ * aviso quando a ligação precisa de atenção. Leva sempre ao ecrã da nuvem.
+ */
+function accountButton() {
+  const btn = makeEl('button', 'account-btn');
+  btn.setAttribute('aria-label', 'Conta Google');
+  if (!cloud.isConfigured()) btn.hidden = true;
+
+  const account = cloud.getAccount();
+  if (account && account.picture) {
+    const img = document.createElement('img');
+    img.src = account.picture;
+    img.alt = '';
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => {
+      img.remove();
+      btn.textContent = (account.name || '?').charAt(0).toUpperCase();
+    });
+    btn.appendChild(img);
+  } else if (cloud.isEnabled()) {
+    btn.textContent = account && account.name ? account.name.charAt(0).toUpperCase() : '☁️';
+  } else {
+    btn.classList.add('signed-out');
+    btn.textContent = 'G';
+  }
+
+  if (cloudNeedsAttention()) btn.appendChild(makeEl('span', 'account-alert'));
+  btn.addEventListener('click', () => navigate('#/cloud'));
+  return btn;
+}
+
+function refreshAccountButtons() {
+  document.querySelectorAll('.account-btn').forEach((old) => old.replaceWith(accountButton()));
+}
+
 function avatarBadge(avatarId, sizeClass) {
   const a = getAvatar(avatarId);
   const badge = makeEl('div', `avatar-badge ${sizeClass || ''}`, a.emoji);
@@ -151,6 +195,11 @@ function avatarBadge(avatarId, sizeClass) {
 function renderProfileSelect() {
   clearApp();
   const screen = makeEl('div', 'screen');
+
+  const topbar = makeEl('div', 'topbar');
+  topbar.appendChild(makeEl('div'));
+  topbar.appendChild(accountButton());
+  screen.appendChild(topbar);
 
   screen.appendChild(makeEl('div', 'mascot', '✖️✨'));
   screen.appendChild(makeEl('h1', 'title-hero', 'Tabuada<br>Divertida'));
@@ -192,13 +241,13 @@ function renderProfileSelect() {
 
   screen.appendChild(grid);
 
-  const cloudNeedsAttention = cloud.getStatus() === 'reconnect' || cloud.hasPendingConflict();
-  const cloudLabel = cloudNeedsAttention
-    ? '⚠️ Sincronização precisa de atenção'
-    : (cloud.isEnabled() ? '☁️ Dados guardados online' : '☁️ Guardar dados online');
-  const cloudBtn = makeEl('button', 'btn secondary block cloud-entry', cloudLabel);
-  cloudBtn.addEventListener('click', () => navigate('#/cloud'));
-  screen.appendChild(cloudBtn);
+  // Depois de ligada, a conta vive no botão do canto. Antes disso, este
+  // botão grande é o convite para guardar online.
+  if (cloud.isConfigured() && !cloud.isEnabled()) {
+    const cloudBtn = makeEl('button', 'btn secondary block cloud-entry', '☁️ Guardar dados online');
+    cloudBtn.addEventListener('click', () => navigate('#/cloud'));
+    screen.appendChild(cloudBtn);
+  }
 
   app.appendChild(screen);
 }
@@ -273,7 +322,7 @@ function renderCreateProfile() {
 
 // ---------- Topbar reutilizável ----------
 
-function buildTopbar(profile, { showBack, onBack, showHome = true } = {}) {
+function buildTopbar(profile, { showBack, onBack, showHome = true, showAccount = true } = {}) {
   const topbar = makeEl('div', 'topbar');
 
   const navGroup = makeEl('div', 'topbar-nav');
@@ -298,6 +347,8 @@ function buildTopbar(profile, { showBack, onBack, showHome = true } = {}) {
   const streak = store.getDisplayStreak(profile.id);
   right.appendChild(makeEl('div', `streak-chip ${streak > 0 ? 'active' : ''}`, `🔥 ${streak}`));
   right.appendChild(makeEl('div', 'points-chip', `⭐ ${store.getTotalPoints(profile.id)}`));
+  // A meio de uma ronda não: um toque tirava a criança do jogo.
+  if (showAccount) right.appendChild(accountButton());
   topbar.appendChild(right);
 
   return topbar;
@@ -464,6 +515,7 @@ function renderGameplay(worldId, stageIndex) {
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
     onBack: () => navigate(`#/world/${world.id}`),
+    showAccount: false,
   }));
 
   const progressTrack = makeEl('div', 'progress-bar-track');
@@ -640,6 +692,7 @@ function renderAssessmentRun() {
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
     onBack: () => navigate('#/assessment'),
+    showAccount: false,
   }));
 
   const progressTrack = makeEl('div', 'progress-bar-track');
@@ -826,6 +879,7 @@ function renderReviewRun() {
   screen.appendChild(buildTopbar(profile, {
     showBack: true,
     onBack: () => navigate('#/review'),
+    showAccount: false,
   }));
 
   const progressTrack = makeEl('div', 'progress-bar-track');
@@ -944,6 +998,14 @@ function renderCloud() {
     screen.appendChild(btnRow);
     app.appendChild(screen);
     return;
+  }
+
+  const account = cloud.getAccount();
+  if (account && account.name) {
+    const who = makeEl('div', 'account-chip');
+    who.appendChild(accountButton());
+    who.appendChild(makeEl('span', '', `Ligado como <strong>${escapeHtml(account.name)}</strong>`));
+    screen.appendChild(who);
   }
 
   screen.appendChild(makeEl('p', 'subtitle', cloudStatusText()));

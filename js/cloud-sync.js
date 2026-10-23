@@ -22,6 +22,10 @@ const KEY_LAST_SYNC = 'td_last_sync_v1';       // "savedAt" da cópia remota que
 const KEY_LOCAL_CHANGE = 'td_local_change_v1'; // última alteração feita neste telemóvel
 const KEY_ENABLED = 'td_cloud_enabled_v1';
 const KEY_ACCOUNT = 'td_google_account_v1';    // { name, picture } da conta ligada
+// O acesso ao Google dura uma hora. Guardamo-lo neste telemóvel (não vai
+// para o Drive) para não ter de o pedir outra vez de cada vez que o jogo
+// abre: cada pedido ao Google abre uma janela, que num telemóvel se vê.
+const KEY_TOKEN = 'td_google_token_v1';         // { token, expiresAt }
 
 // Espera um pouco depois de uma alteração antes de enviar, para não fazer
 // um pedido por cada resposta certa — no fim de um estágio há várias
@@ -30,6 +34,14 @@ const BACKUP_DELAY_MS = 4000;
 
 let accessToken = null;
 let tokenExpiresAt = 0;
+// Quando é que uma sincronização pode pedir acesso ao Google:
+//   'interactive' — a pessoa tocou num botão: pode aparecer o ecrã do Google;
+//   'silent'      — há progresso por guardar: pedido sem perguntas, mas a
+//                   janela do Google ainda pisca. Acontece no máximo uma vez
+//                   por hora, porque o acesso que vem a seguir dura uma hora;
+//   'never'       — abrir o jogo, voltar a ele, sair dele: só sincroniza com
+//                   o acesso que já houver.
+let tokenPolicy = 'never';
 let tokenClient = null;
 let gisLoadPromise = null;
 let backupTimer = null;
@@ -49,7 +61,27 @@ export function isEnabled() {
   return isConfigured() && localStorage.getItem(KEY_ENABLED) === '1';
 }
 
+function loadSavedToken() {
+  if (accessToken) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY_TOKEN) || 'null');
+    if (saved && saved.token && Date.now() < saved.expiresAt) {
+      accessToken = saved.token;
+      tokenExpiresAt = saved.expiresAt;
+    }
+  } catch (e) {
+    // sem acesso guardado
+  }
+}
+
+function forgetToken() {
+  accessToken = null;
+  tokenExpiresAt = 0;
+  localStorage.removeItem(KEY_TOKEN);
+}
+
 export function isSignedIn() {
+  loadSavedToken();
   return Boolean(accessToken) && Date.now() < tokenExpiresAt;
 }
 
@@ -164,6 +196,7 @@ function requestToken(prompt) {
       accessToken = response.access_token;
       // Tiramos um minuto de margem para não usar um token quase a expirar.
       tokenExpiresAt = Date.now() + (Number(response.expires_in || 3600) - 60) * 1000;
+      localStorage.setItem(KEY_TOKEN, JSON.stringify({ token: accessToken, expiresAt: tokenExpiresAt }));
       if (oauth2.hasGrantedAllScopes(response, GOOGLE_PROFILE_SCOPE) && !localStorage.getItem(KEY_ACCOUNT)) {
         fetchAccount().catch(() => {});
       }
@@ -184,10 +217,11 @@ async function fetchAccount() {
   emit({ type: 'account' });
 }
 
-async function ensureToken(interactive) {
+async function ensureToken(policy) {
   if (isSignedIn()) return accessToken;
+  if (policy === 'never') throw new Error('no-token');
   await loadGis();
-  return requestToken(interactive ? '' : 'none');
+  return requestToken(policy === 'interactive' ? '' : 'none');
 }
 
 /** Ligar a conta. Tem de ser chamado a partir de um toque do utilizador. */
@@ -200,11 +234,17 @@ export async function connect() {
 }
 
 export function disconnect() {
-  if (accessToken && window.google && window.google.accounts && window.google.accounts.oauth2) {
-    window.google.accounts.oauth2.revoke(accessToken, () => {});
+  loadSavedToken();
+  if (accessToken) {
+    // Diretamente ao Google: a biblioteca de entrada pode nem estar
+    // carregada, agora que o acesso fica guardado entre aberturas.
+    fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `token=${encodeURIComponent(accessToken)}`,
+    }).catch(() => {});
   }
-  accessToken = null;
-  tokenExpiresAt = 0;
+  forgetToken();
   pendingConflict = false;
   localStorage.removeItem(KEY_ENABLED);
   localStorage.removeItem(KEY_FILE_ID);
@@ -219,10 +259,10 @@ async function driveFetch(url, options = {}, retry = true) {
   const headers = Object.assign({ Authorization: `Bearer ${accessToken}` }, options.headers || {});
   const res = await fetch(url, Object.assign({}, options, { headers }));
   if (res.status === 401 && retry) {
-    // Token expirado a meio: tenta renovar em silêncio e repete uma vez.
-    accessToken = null;
-    tokenExpiresAt = 0;
-    await ensureToken(false);
+    // Token expirado ou revogado a meio: pede outro, se esta sincronização
+    // o puder fazer, e repete uma vez.
+    forgetToken();
+    await ensureToken(tokenPolicy);
     return driveFetch(url, options, false);
   }
   return res;
@@ -347,22 +387,36 @@ function hasLocalProfiles() {
  * mudou desde a última sincronização deste telemóvel.
  * Devolve { action: 'uploaded' | 'downloaded' | 'conflict' | 'deferred' | 'none' }.
  */
-export function syncNow(interactive = false) {
+/**
+ * `interactive` true quando a pessoa tocou num botão. Sem isso, a
+ * sincronização usa o acesso que já houver; com `allowSilent` (há progresso
+ * por guardar) pode pedir um novo sem perguntas.
+ */
+export function syncNow(interactive = false, { allowSilent = false } = {}) {
   if (!isConfigured()) return Promise.reject(new Error('not-configured'));
   if (syncInFlight) return syncInFlight;
-  syncInFlight = doSync(interactive).finally(() => {
+  const policy = interactive ? 'interactive' : (allowSilent ? 'silent' : 'never');
+  syncInFlight = doSync(policy).finally(() => {
     syncInFlight = null;
   });
   return syncInFlight;
 }
 
-async function doSync(interactive) {
+async function doSync(policy) {
+  tokenPolicy = policy;
+  if (policy === 'never' && !isSignedIn()) {
+    // Sem acesso válido e sem licença para o pedir: fica para a próxima
+    // vez que houver progresso para guardar. Nada se perde — a data da
+    // última alteração local fica guardada até lá.
+    if (status === 'off' || status === 'syncing') setStatus('ready');
+    return { action: 'skipped' };
+  }
   setStatus('syncing');
 
   try {
-    await ensureToken(interactive);
+    await ensureToken(policy);
   } catch (e) {
-    // Sem token e sem poder perguntar: fica a pedir que voltem a ligar.
+    // O Google recusou dar acesso sem perguntar: fica a pedir que voltem a ligar.
     setStatus('reconnect');
     throw new Error('needs-reconnect');
   }
@@ -432,7 +486,8 @@ async function doSync(interactive) {
 export async function resolveConflict(choice) {
   pendingConflict = false;
   if (choice === 'remote') return restoreNow();
-  await ensureToken(false);
+  tokenPolicy = 'interactive';
+  await ensureToken('interactive');
   await uploadBackup();
   setStatus('ready');
   return { action: 'uploaded' };
@@ -440,7 +495,8 @@ export async function resolveConflict(choice) {
 
 /** Trazer a cópia da nuvem por cima do que está neste telemóvel. */
 export async function restoreNow() {
-  await ensureToken(false);
+  tokenPolicy = 'interactive';
+  await ensureToken('interactive');
   const remote = await downloadBackup();
   if (!remote) throw new Error('no-backup-found');
   applyRemoteData(remote.data || {});
@@ -459,7 +515,7 @@ function handleLocalChange() {
   clearTimeout(backupTimer);
   backupTimer = setTimeout(() => {
     backupTimer = null;
-    syncNow(false).catch(() => {});
+    syncNow(false, { allowSilent: true }).catch(() => {});
   }, BACKUP_DELAY_MS);
 }
 

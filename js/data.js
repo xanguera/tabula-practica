@@ -116,50 +116,46 @@ function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+/** Escolha sem preferências: `count` factos ao acaso, sem repetir. */
+function pickRandom(candidates, count) {
+  return shuffle(candidates).slice(0, count);
+}
+
 /**
  * Gera a lista de perguntas para um estágio.
  * Cada pergunta: { a, b, answer }
+ *
+ * `pickFacts(candidates, count)` escolhe que contas perguntar nos estágios
+ * baralhados, de pares e contra o tempo. A aplicação passa uma escolha que
+ * dá mais vezes as contas que a criança ainda não sabe (ver facts.js); sem
+ * ela, a escolha é ao acaso. As sequências seguem sempre a ordem.
  */
-export function generateQuestions(world, stageDef, count = 8) {
+export function generateQuestions(world, stageDef, count = 8, pickFacts = pickRandom) {
   const isFinal = world.isFinal;
   const table = world.table;
 
-  const makePair = (a, b) => ({ a, b, answer: a * b });
+  const makePair = ({ a, b }) => ({ a, b, answer: a * b });
+  const multipliers = (t) => [...Array(10)].map((_, i) => ({ a: i + 1, b: t }));
 
   switch (stageDef.type) {
     case STAGE_TYPES.SEQ_CHOICE:
     case STAGE_TYPES.SEQ_TYPE: {
       // sequência ascendente: 1xtable, 2xtable, ... até 10xtable (amostra `count`)
-      const seq = [];
-      for (let n = 1; n <= 10; n++) seq.push(makePair(n, table));
-      return seq.slice(0, count);
+      return multipliers(table).slice(0, count).map(makePair);
     }
     case STAGE_TYPES.RANDOM_CHOICE:
     case STAGE_TYPES.TIMED: {
-      const list = [];
-      if (isFinal) {
-        for (let i = 0; i < count; i++) {
-          const t = TABLES[randInt(0, TABLES.length - 1)];
-          const n = randInt(1, 10);
-          list.push(makePair(n, t));
-        }
-      } else {
-        const seq = shuffle([...Array(10)].map((_, i) => i + 1));
-        for (let i = 0; i < count; i++) list.push(makePair(seq[i % seq.length], table));
-      }
-      return list;
+      const candidates = isFinal ? TABLES.flatMap(multipliers) : multipliers(table);
+      return pickFacts(candidates, count).map(makePair);
     }
     case STAGE_TYPES.MATCHING: {
       const pairCount = Math.min(count, 6);
-      const list = [];
       if (isFinal) {
-        const usedTables = shuffle(TABLES).slice(0, pairCount);
-        usedTables.forEach((t) => list.push(makePair(randInt(1, 10), t)));
-      } else {
-        const seq = shuffle([...Array(10)].map((_, i) => i + 1)).slice(0, pairCount);
-        seq.forEach((n) => list.push(makePair(n, table)));
+        // uma conta de cada tabuada, para os pares não se confundirem
+        return shuffle(TABLES).slice(0, pairCount)
+          .map((t) => makePair(pickFacts(multipliers(t), 1)[0]));
       }
-      return list;
+      return pickFacts(multipliers(table), pairCount).map(makePair);
     }
     default:
       return [];

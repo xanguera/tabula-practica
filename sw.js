@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tabuada-divertida-v9';
+const CACHE_NAME = 'tabuada-divertida-v10';
 const ASSETS = [
   './',
   './manifest.json',
@@ -15,6 +15,7 @@ const ASSETS = [
   './js/config.js',
   './js/cloud-sync.js',
   './js/placement.js',
+  './js/facts.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',

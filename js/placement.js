@@ -74,9 +74,14 @@ export function nextQuestion(state) {
   return { a: multiplier, b: table, answer: multiplier * table, table };
 }
 
-function adjustedTime(state, question, elapsedMs) {
-  const extraDigits = String(question.answer).length - 1;
-  return Math.max(0, elapsedMs - state.typingAllowanceMs - extraDigits * EXTRA_DIGIT_MS);
+/**
+ * Tempo de resposta sem o tempo de escrever: tira a folga de quem escreve
+ * devagar e um pouco por cada algarismo a mais. Usado também pelo desafio
+ * "Já sei esta!".
+ */
+export function adjustedTime(typingAllowanceMs, answer, elapsedMs) {
+  const extraDigits = String(answer).length - 1;
+  return Math.max(0, elapsedMs - typingAllowanceMs - extraDigits * EXTRA_DIGIT_MS);
 }
 
 function stop(state, reason) {
@@ -120,7 +125,7 @@ export function recordAnswer(state, question, result) {
   }
 
   const table = question.table;
-  const adjustedMs = adjustedTime(state, question, result.elapsedMs);
+  const adjustedMs = adjustedTime(state.typingAllowanceMs, question.answer, result.elapsedMs);
   const tier = classifyAnswer(result.correct, adjustedMs);
   state.answers.push({
     a: question.a, b: question.b, table, answer: question.answer,
@@ -202,4 +207,24 @@ export function getResult(state) {
   const knownTables = [];
   for (let t = 1; t < startTable; t++) knownTables.push(t);
   return { startTable, allKnown: false, knownTables };
+}
+
+// ---------- Desafio "Já sei esta!" ----------
+// O mesmo princípio numa só tabuada: cinco contas difíceis. Certas e
+// rápidas, a tabuada fica marcada como sabida, como no teste de colocação.
+
+export const CHALLENGE_SIZE = 5;
+
+/** ×6, ×7, ×8, ×9 e um de ×3/×4, por ordem baralhada. */
+export function challengeQuestions(table, rng = Math.random) {
+  const multipliers = [6, 7, 8, 9, rng() < 0.5 ? 3 : 4];
+  return shuffle(multipliers, rng).map((a) => ({ a, b: table, answer: a * table, table }));
+}
+
+/** Passa com todas certas, nenhuma lenta, e pelo menos 4 de cor. */
+export function isChallengePassed(answers) {
+  const automatic = answers.filter((x) => x.tier === 'automatic').length;
+  return answers.length === CHALLENGE_SIZE
+    && answers.every((x) => x.tier === 'automatic' || x.tier === 'developing')
+    && automatic >= CHALLENGE_SIZE - 1;
 }

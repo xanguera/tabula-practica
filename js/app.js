@@ -1,11 +1,15 @@
 import {
   AVATARS, getAvatar, WORLDS, getWorld, stagesForWorld,
   generateQuestions, calcStars, generateAssessmentQuestions, buildAssessmentReport,
-  TABLE_STATUS_LABELS, generateReviewQuestions,
+  TABLE_STATUS_LABELS, generateReviewQuestions, classifyAnswer, STAGE_TYPES,
 } from './data.js';
+import { pickWeighted } from './facts.js';
 import * as store from './storage.js';
 import { runStage, renderTypeQuestion } from './exercises.js';
-import { createPlacement, nextQuestion, recordAnswer, getResult } from './placement.js';
+import {
+  createPlacement, nextQuestion, recordAnswer, getResult,
+  adjustedTime, challengeQuestions, isChallengePassed,
+} from './placement.js';
 import { runAssessment } from './assessment.js';
 import { runReview } from './review.js';
 import { shareReport, formatDuration } from './report.js';
@@ -27,6 +31,8 @@ function showToast(msg) {
 // Guarda o último resultado de estágio para passar para o ecrã de resultado
 let lastResult = null;
 let pendingCreateAvatar = AVATARS[0].id;
+// Respostas do último desafio "Já sei esta!", para o ecrã de resultado
+let lastChallenge = null;
 
 function navigate(hash) {
   if (location.hash === hash) render();
@@ -58,6 +64,7 @@ function isSafeToReplaceData() {
   if (parts[0] === 'stage') return false;
   if (parts[0] === 'assessment' && parts[1] === 'run') return false;
   if (parts[0] === 'placement' && parts[1] !== 'result') return false;
+  if (parts[0] === 'challenge' && parts[2] !== 'result') return false;
   if (parts[0] === 'review' && parts[1] === 'run') return false;
   return true;
 }
@@ -114,6 +121,10 @@ function render() {
   if (route === 'stage') return renderGameplay(parts[1], Number(parts[2]));
   if (route === 'result') return renderResult();
   if (route === 'tests') return renderTestsHub();
+  if (route === 'challenge') {
+    if (parts[2] === 'result') return renderChallengeResult(parts[1]);
+    return renderChallengeRun(parts[1]);
+  }
   if (route === 'placement') {
     if (parts[1] === 'result') return renderPlacementResult(parts[2]);
     return renderPlacementRun();
@@ -487,6 +498,22 @@ function renderStageList(worldId) {
   screen.appendChild(makeEl('h2', 'title-hero', world.isFinal ? '🏆 Desafio Final' : `Tabuada do ${world.table}`));
   screen.appendChild(makeEl('p', 'subtitle', world.isFinal ? 'Mistura de todas as tabuadas' : 'Escolhe um exercício'));
 
+  // Quem já sabe esta tabuada não precisa de passar por todos os estágios.
+  const worldState = store.getWorldState(profile.id, world.id);
+  if (!world.isFinal && worldState !== 'done' && worldState !== 'known') {
+    const challenge = makeEl('div', 'stage-card challenge-card');
+    challenge.appendChild(makeEl('div', 'stage-icon', '⚡'));
+    const info = makeEl('div', 'stage-info');
+    info.appendChild(makeEl('div', 'stage-name', 'Já sei esta!'));
+    info.appendChild(makeEl('div', 'stage-desc', '5 perguntas difíceis. Acerta todas depressa e a tabuada fica marcada como sabida.'));
+    challenge.appendChild(info);
+    challenge.addEventListener('click', () => {
+      playClick();
+      navigate(`#/challenge/${world.id}`);
+    });
+    screen.appendChild(challenge);
+  }
+
   const list = makeEl('div', 'stage-list');
   const stages = stagesForWorld(world);
   stages.forEach((stageDef, index) => {
@@ -548,14 +575,26 @@ function renderGameplay(worldId, stageIndex) {
   app.appendChild(screen);
 
   const questionCount = stageDef.type === 'matching' ? 6 : 8;
-  const questions = generateQuestions(world, stageDef, questionCount);
+  // As contas que a criança ainda não sabe aparecem mais vezes (ver facts.js).
+  const scores = store.getFactScores(profile.id);
+  const questions = generateQuestions(world, stageDef, questionCount,
+    (candidates, count) => pickWeighted(scores, candidates, count));
+
+  // Só os estágios baralhados e contra o tempo dizem o que a criança sabe:
+  // na sequência a resposta deduz-se da anterior, e os pares não medem tempo.
+  const measuresRecall = stageDef.type === STAGE_TYPES.RANDOM_CHOICE || stageDef.type === STAGE_TYPES.TIMED;
+  const factAnswers = [];
 
   runStage(content, world, stageDef, questions, {
-    onQuestionResult: ({ index, total }) => {
+    onQuestionResult: ({ index, total, question, correct, elapsedMs }) => {
       const pct = Math.min(100, ((index + 1) / total) * 100);
       progressFill.style.width = `${pct}%`;
+      if (measuresRecall && question) {
+        factAnswers.push({ a: question.a, b: question.b, tier: classifyAnswer(correct, elapsedMs) });
+      }
     },
     onStageComplete: ({ correct, total, points }) => {
+      store.recordFactAnswers(profile.id, factAnswers);
       const stars = calcStars(correct, total);
       const { pointsAwarded } = store.saveStageResult(profile.id, world.id, stageIndex, {
         stars, points, correct, total,
@@ -700,6 +739,118 @@ function renderAssessmentHub() {
   app.appendChild(screen);
 }
 
+// ---------- Ecrã: desafio "Já sei esta!" ----------
+// Cinco contas difíceis de uma tabuada, sem relógio à vista. Certas e
+// rápidas, a tabuada fica marcada como sabida (🎯).
+
+function renderChallengeRun(worldId) {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  const world = getWorld(worldId);
+  if (!world || world.isFinal) { navigate('#/map'); return; }
+  clearApp();
+
+  const screen = makeEl('div', 'screen');
+  screen.appendChild(buildTopbar(profile, {
+    showBack: true,
+    onBack: () => navigate(`#/world/${world.id}`),
+    inRound: true,
+  }));
+  screen.appendChild(makeEl('h2', 'title-hero', `⚡ Tabuada do ${world.table}`));
+  screen.appendChild(makeEl('p', 'question-hint center-text', 'Sem pressa, escreve a resposta que achares certa.'));
+  const content = makeEl('div', 'exercise-content');
+  screen.appendChild(content);
+  app.appendChild(screen);
+
+  // A folga de escrita vem do último teste de colocação, se houver.
+  const lastPlacement = store.getPlacements(profile.id)[0];
+  const typingAllowanceMs = lastPlacement ? lastPlacement.typingAllowanceMs || 0 : 0;
+  const questions = challengeQuestions(world.table);
+  const answers = [];
+
+  function ask() {
+    if (!app.contains(content)) return;
+    if (answers.length >= questions.length) {
+      store.recordFactAnswers(profile.id, answers);
+      const passed = isChallengePassed(answers);
+      if (passed) store.markTablesKnown(profile.id, [world.table]);
+      lastChallenge = { worldId: world.id, passed, answers };
+      navigate(`#/challenge/${world.id}/result`);
+      return;
+    }
+    const q = questions[answers.length];
+    renderTypeQuestion(content, q, false, (result) => {
+      const adjustedMs = adjustedTime(typingAllowanceMs, q.answer, result.elapsedMs);
+      answers.push({
+        a: q.a, b: q.b, answer: q.answer, given: result.given,
+        correct: result.correct, elapsedMs: result.elapsedMs, adjustedMs,
+        tier: classifyAnswer(result.correct, adjustedMs),
+      });
+      setTimeout(ask, 500);
+    });
+  }
+
+  ask();
+}
+
+function renderChallengeResult(worldId) {
+  const profile = requireActiveProfile();
+  if (!profile) return;
+  const world = getWorld(worldId);
+  if (!world || !lastChallenge || lastChallenge.worldId !== worldId) { navigate(`#/world/${worldId}`); return; }
+  const { passed, answers } = lastChallenge;
+  clearApp();
+
+  const screen = makeEl('div', 'result-screen');
+  addFloatingHome(screen);
+
+  const btnRow = makeEl('div', 'btn-row');
+  btnRow.style.flexDirection = 'column';
+  btnRow.style.width = '100%';
+  btnRow.style.marginTop = '20px';
+
+  if (passed) {
+    screen.appendChild(makeEl('div', 'mascot', '🎉'));
+    screen.appendChild(makeEl('h2', 'title-hero', `Já sabes a tabuada do ${world.table}!`));
+    screen.appendChild(makeEl('p', 'subtitle', 'Ficou marcada no mapa com 🎯. Podes praticá-la sempre que quiseres.'));
+    playFanfare();
+    celebrate();
+    // A seguir vem a próxima tabuada por fazer depois desta; só se não
+    // houver nenhuma, a primeira por fazer em todo o mapa.
+    const isOpen = (w) => !['done', 'known'].includes(store.getWorldState(profile.id, w.id));
+    const after = WORLDS.slice(WORLDS.findIndex((w) => w.id === world.id) + 1).find(isOpen);
+    const nextId = after ? after.id : store.getNextWorldId(profile.id);
+    if (nextId) {
+      const nextWorld = getWorld(nextId);
+      const nextBtn = makeEl('button', 'btn primary block', nextWorld.isFinal ? 'Ir para o Desafio Final 🚀' : `Próxima: tabuada do ${nextWorld.table} 🚀`);
+      nextBtn.addEventListener('click', () => {
+        playClick();
+        navigate(`#/world/${nextId}`);
+      });
+      btnRow.appendChild(nextBtn);
+    }
+  } else {
+    screen.appendChild(makeEl('div', 'mascot', '💪'));
+    screen.appendChild(makeEl('h2', 'title-hero', 'Quase! Ainda vale a pena praticar'));
+    const toPractise = answers.filter((x) => x.tier !== 'automatic').map((x) => `${x.a} × ${x.b}`);
+    screen.appendChild(makeEl('p', 'subtitle', `Vale a pena treinar: ${toPractise.join(', ')}`));
+    const practiseBtn = makeEl('button', 'btn primary block', 'Praticar esta tabuada');
+    practiseBtn.addEventListener('click', () => {
+      playClick();
+      navigate(`#/world/${world.id}`);
+    });
+    btnRow.appendChild(practiseBtn);
+  }
+
+  const backBtn = makeEl('button', 'btn secondary block', 'Voltar ao mapa');
+  backBtn.style.marginTop = '10px';
+  backBtn.addEventListener('click', () => navigate('#/map'));
+  btnRow.appendChild(backBtn);
+
+  screen.appendChild(btnRow);
+  app.appendChild(screen);
+}
+
 // ---------- Ecrã: Testes (colocação e avaliação) ----------
 
 function renderTestsHub() {
@@ -804,6 +955,7 @@ function renderPlacementRun() {
       stopReason: state.stopReason,
       answers: state.answers,
     };
+    store.recordFactAnswers(profile.id, state.answers);
     store.savePlacement(profile.id, record);
     navigate(`#/placement/result/${record.id}`);
   }
@@ -918,6 +1070,7 @@ function renderAssessmentRun() {
       progressFill.style.width = `${pct}%`;
     },
     onComplete: ({ answers, totalTimeMs }) => {
+      store.recordFactAnswers(profile.id, answers);
       const report = buildAssessmentReport(answers);
       const record = {
         id: 'a_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -1088,7 +1241,8 @@ function renderReviewRun() {
     onProgress: ({ index, total }) => {
       progressFill.style.width = `${(index / total) * 100}%`;
     },
-    onComplete: ({ correct, total }) => {
+    onComplete: ({ correct, total, answers }) => {
+      store.recordFactAnswers(profile.id, answers);
       const points = correct * 5;
       store.addBonusPoints(profile.id, points);
       const streakState = store.recordReviewCompletion(profile.id);

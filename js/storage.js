@@ -1,5 +1,6 @@
 // ---------- Persistência local (perfis, progresso) ----------
 import { WORLDS, stagesForWorld, getWorld } from './data.js';
+import { updateScores } from './facts.js';
 
 const KEY_PROFILES = 'td_profiles_v1';
 const KEY_ACTIVE = 'td_active_profile_v1';
@@ -230,6 +231,23 @@ export function getTotalStars(profileId) {
 
 export function isGameFullyComplete(profileId) {
   return WORLDS.every((w) => isWorldFullyStarred(profileId, w.id));
+}
+
+// ---------- O que a criança sabe, conta a conta (ver facts.js) ----------
+
+export function getFactScores(profileId) {
+  return getProgress(profileId).facts || {};
+}
+
+/**
+ * Regista as respostas de uma ronda [{ a, b, tier }] de uma só vez, no fim,
+ * para não escrever (e sincronizar) a cada resposta.
+ */
+export function recordFactAnswers(profileId, answers) {
+  if (!answers.length) return;
+  const progress = getProgress(profileId);
+  progress.facts = updateScores(progress.facts || {}, answers);
+  saveProgress(profileId, progress);
 }
 
 // ---------- Histórico do teste de avaliação ----------

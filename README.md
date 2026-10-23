@@ -15,16 +15,20 @@ The child moves along a map of small worlds, one for each times table. Each worl
 - matching each question to its answer
 - a race against the clock, with bonus points for speed
 
-Each finished round earns stars. When a world is complete, the next one opens. A final world mixes all the tables together.
+Each finished round earns stars. Every world is open from the start, so the child can practise any table at any time. The map shows which tables are done, which ones the child has shown they already know, and which one comes next. A final world mixes all the tables together.
+
+The game also adapts to the child. Questions the child gets wrong or answers slowly come up more often, and the ones they know by heart come up less.
 
 ## Extras
 
-- **Check-up test.** A short, relaxed test shows which tables the child already knows well and which need more practice. Parents can share the result as an image. If the child already knows the early tables, the game offers to skip ahead.
+- **Where do I start?** A short test, about six questions, that gets harder after quick right answers and easier after mistakes. It recommends which table to start at, and offers to skip the ones the child already knows.
+- **"I already know this one!"** Each table has a five-question challenge. Answer them all right and quickly, and the table is marked as known, so a child who knows it doesn't have to play every round.
+- **Check-up test.** A short, relaxed test shows which tables the child already knows well and which need more practice. Parents can share the result as an image.
 - **Daily review.** A quick 10-question quiz each day, focused on the tables the child finds hardest. Playing on consecutive days builds a streak.
 - **Several players.** Brothers, sisters and friends can each have their own player with their own avatar and progress on the same device.
 
 ## Privacy
 
-There are no accounts, ads or tracking. Progress is saved on the device itself. You can add the game to your home screen like an app, and it works without an internet connection.
+There are no ads or tracking, and no account is needed to play. Progress is saved on the device itself. You can add the game to your home screen like an app, and it works without an internet connection.
 
-The code also includes optional backup to the player's own Google Drive, so progress can move between devices. It is not switched on yet.
+Parents can optionally connect a Google account to back up progress to their own Google Drive, so it moves between devices. The backup lives in a hidden folder that only this game can read. See the [privacy policy](https://xavieranguera.com/privacy).

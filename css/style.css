@@ -524,6 +524,12 @@ button.player-chip:active { transform: scale(0.95); }
   border: 2px solid transparent;
 }
 .stage-card.done { border-color: rgba(61, 220, 132, 0.45); }
+/* Desafio "Já sei esta!": por cima da lista de estágios, em amarelo. */
+.challenge-card {
+  margin-bottom: 12px;
+  background: rgba(255, 214, 92, 0.1);
+  border-color: rgba(255, 214, 92, 0.45);
+}
 .stage-card:active { transform: scale(0.98); }
 
 .stage-icon {

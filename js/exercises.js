@@ -47,7 +47,7 @@ export function runStage(container, world, stageDef, questions, callbacks) {
       if (result.correct) correctCount++;
       totalPoints += result.points;
       index++;
-      onQuestionResult({ index: index - 1, total: questions.length, ...result });
+      onQuestionResult({ index: index - 1, total: questions.length, question: q, ...result });
       wait(useType ? 550 : 700).then(next);
     };
 
@@ -82,7 +82,7 @@ export function renderChoiceQuestion(container, question, timed, onResolve) {
       resolved = true;
       showAnswerReveal();
       playWrong();
-      onResolve({ correct: false, points: 0, timedOut: true });
+      onResolve({ correct: false, points: 0, timedOut: true, elapsedMs: timeLimit });
     });
   }
 
@@ -118,7 +118,7 @@ export function renderChoiceQuestion(container, question, timed, onResolve) {
           points += Math.round(remaining * 10);
         }
       }
-      onResolve({ correct: isCorrect, points });
+      onResolve({ correct: isCorrect, points, elapsedMs: Math.round(elapsed) });
     });
     grid.appendChild(btn);
     return btn;
